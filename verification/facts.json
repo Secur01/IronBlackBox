@@ -1,0 +1,640 @@
+{
+  "_comment": "Windows facts this toolkit depends on, with provenance. Rule 0 (docs/AUTHORING.md): never state a Windows fact from memory. Every literal in a script must trace to a row here. 'admx' means it was extracted from the policy definitions Microsoft ships on the target OS itself - the authoritative declaration for that build - not from a web page.",
+  "_dates": "There is no file-level collection date. This ledger is appended to as facts are measured, and the single field that used to be here read 2026-08-27 while 22 rows carried dates from 2026-08-28 to 2026-09-02 - among them at13-fix-remeasured-retention-11s-to-24h, which it dated before the run that produced it. Every row dates itself in its own source, and that is the only date that can stay right.",
+  "facts": [
+    {
+      "id": "ps-scriptblock-logging",
+      "key": "HKLM:\\Software\\Policies\\Microsoft\\Windows\\PowerShell\\ScriptBlockLogging",
+      "valueName": "EnableScriptBlockLogging",
+      "kind": "DWord",
+      "enabledValue": 1,
+      "status": "verified-lab",
+      "source": "PowerShellExecutionPolicy.admx, policy EnableScriptBlockLogging, enabledValue decimal 1",
+      "notes": "class=Both, so a User-scope twin exists; this toolkit writes the Machine scope only. Sibling element EnableScriptBlockInvocationLogging (DWord) logs start/stop of every block - very high volume, left off by default. PROVEN: 4104 events appear for script blocks in a NEW powershell session after -Apply."
+    },
+    {
+      "id": "ps-module-logging",
+      "key": "HKLM:\\Software\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging",
+      "valueName": "EnableModuleLogging",
+      "kind": "DWord",
+      "enabledValue": 1,
+      "status": "verified-admx",
+      "source": "PowerShellExecutionPolicy.admx, policy EnableModuleLogging"
+    },
+    {
+      "id": "ps-module-names",
+      "key": "HKLM:\\Software\\Policies\\Microsoft\\Windows\\PowerShell\\ModuleLogging\\ModuleNames",
+      "valueName": "*",
+      "kind": "String",
+      "enabledValue": "*",
+      "status": "verified-lab",
+      "source": "PowerShellExecutionPolicy.admx declares <list id=\"Listbox_ModuleNames\" key=\"...\\ModuleNames\"/> with no valuePrefix, so entries are name/value pairs in that subkey",
+      "notes": "PROVEN on the lab: after -Apply, 4103 module-logging events appear in Microsoft-Windows-PowerShell/Operational. The '*' = '*' pair is what enables all modules."
+    },
+    {
+      "id": "ps-transcription",
+      "key": "HKLM:\\Software\\Policies\\Microsoft\\Windows\\PowerShell\\Transcription",
+      "valueName": "EnableTranscripting",
+      "kind": "DWord",
+      "enabledValue": 1,
+      "status": "verified-lab",
+      "source": "PowerShellExecutionPolicy.admx, policy EnableTranscripting",
+      "notes": "Sibling elements: OutputDirectory (text/String), EnableInvocationHeader (boolean/DWord). PROVEN: transcripts were written into a yyyyMMdd subfolder of OutputDirectory (e.g. Transcripts\\20260823\\PowerShell_transcript.<host>.<id>.<stamp>.txt)."
+    },
+    {
+      "id": "audit-process-cmdline",
+      "key": "HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Policies\\System\\Audit",
+      "valueName": "ProcessCreationIncludeCmdLine_Enabled",
+      "kind": "DWord",
+      "enabledValue": 1,
+      "status": "verified-lab",
+      "source": "AuditSettings.admx, policy IncludeCmdLine, supportedOn SUPPORTED_Windows_6_3",
+      "notes": "Note the key is under Software\\Microsoft\\..., NOT Software\\Policies\\Microsoft\\... - unlike every other policy here. Puts the command line into event 4688. PROVEN: event 4688 carried 'Process Command Line: \"C:\\Windows\\system32\\cmd.exe\" /c ...' immediately after -Apply, with no reboot."
+    },
+    {
+      "id": "eventlog-maxsize",
+      "key": "HKLM:\\Software\\Policies\\Microsoft\\Windows\\EventLog\\<Channel>",
+      "valueName": "MaxSize",
+      "kind": "DWord",
+      "status": "verified-lab-measured",
+      "source": "EventLog.admx, Channel_LogMaxSize_* with minValue=20480 maxValue=2147483647; channels declared: Application, Security, Setup, System",
+      "unit": "kilobytes",
+      "notes": "PROVEN in kilobytes by measurement: a policy value of 1048576 produced a channel maxSize of 1073741824 bytes (exactly 1048576 * 1024), read via 'wevtutil gl Security'. REQUIRES A REBOOT: unchanged after 'gpupdate /target:computer /force', correct after restart."
+    },
+    {
+      "id": "firewall-logging",
+      "key": "HKLM:\\SOFTWARE\\Policies\\Microsoft\\WindowsFirewall\\<Profile>\\Logging",
+      "valueNames": [
+        "LogDroppedPackets",
+        "LogSuccessfulConnections",
+        "LogFilePath",
+        "LogFileSize"
+      ],
+      "kinds": [
+        "DWord",
+        "DWord",
+        "String",
+        "DWord"
+      ],
+      "status": "verified-lab",
+      "source": "WindowsFirewall.admx, policies WF_Logging_Name_1 (DomainProfile) and WF_Logging_Name_2 (StandardProfile); LogFileSize minValue=128 maxValue=32767",
+      "unit": "LogFileSize in kilobytes",
+      "notes": "IMPORTANT: only DomainProfile and StandardProfile declare a Logging policy. There is NO PublicProfile logging policy in the ADMX - a host on a public network is not covered by this setting. StandardProfile is what the modern UI calls the Private profile. PROVEN on the lab, with two caveats found by running it: (1) the firewall service runs as NT Authority\\LocalService, so a directory granting only SYSTEM and Administrators leaves it unable to write and no log ever appears - NT SERVICE\\mpssvc needs an explicit Modify grant, and that service SID does resolve via NTAccount.Translate; (2) logging starts only after a REBOOT."
+    },
+    {
+      "id": "auditpol-subcategory-guids",
+      "status": "verified-host",
+      "source": "auditpol.exe /list /subcategory:* /r on the lab",
+      "notes": "GUIDs are stable well-known identifiers and are used instead of display names because the names are localised. Full listing captured in the run log; the subset this toolkit sets is enumerated in Enable-IRVisibility.ps1 with each GUID's English name as a comment. Rollback strategy proven: 'auditpol /backup' writes a CSV whose LAST column is a NUMERIC setting value (0 none, 1 success, 3 success+failure), so state is read without parsing localised text; 'auditpol /restore' put all 60 subcategories back to the pre-Apply baseline exactly. Audit policy takes effect immediately and survives a reboot."
+    },
+    {
+      "id": "get-netfirewallprofile-is-not-policy",
+      "status": "verified-lab",
+      "source": "measured on the lab after -Apply and a reboot",
+      "notes": "TRAP. Get-NetFirewallProfile does NOT reflect GPO policy: with the policy active and log files being written, it still reported LogFileName '%systemroot%\\system32\\LogFiles\\Firewall\\pfirewall.log', LogBlocked False and LogMaxSize 4096. It reads the LOCAL store. Any script auditing firewall logging must read the policy registry key, not this cmdlet."
+    },
+    {
+      "id": "psv2-two-apis-disagree",
+      "status": "verified-lab",
+      "source": "measured on the lab, Windows Server 2019 build 17763",
+      "notes": "TRAP. DISM and ServerManager report contradictory state for PowerShell 2.0 on the same host at the same moment: Get-WindowsOptionalFeature said MicrosoftWindowsPowerShellV2 = Enabled while Get-WindowsFeature said PowerShell-V2 = Removed. A script auditing with either one alone gives a wrong answer. IronBlackBox acts on the DISM view (it exists on client and server) and reports the disagreement rather than picking a winner silently."
+    },
+    {
+      "id": "psv2-needs-dotnet35",
+      "status": "verified-lab",
+      "source": "measured on the lab",
+      "notes": "PowerShell 2.0 requires the .NET 2.0 CLR, shipped with .NET Framework 3.5. With NDP\\v3.5 absent and NetFx3 DisabledWithPayloadRemoved, 'powershell.exe -Version 2 -Command \"exit 0\"' exits -65536 and the engine cannot run AT ALL - even though DISM reports the feature Enabled. So feature state is not the same question as exposure, and the exposure question is answered by trying to launch it. Only the exit code is usable: the child's error text comes back as UTF-16 mojibake through a captured pipe."
+    },
+    {
+      "id": "psv2-feature-names-differ-by-sku",
+      "status": "verified-lab-partial",
+      "source": "measured on the lab (server); client side unverified",
+      "notes": "Server 2019 exposes only MicrosoftWindowsPowerShellV2. Windows 10/11 is documented to also carry MicrosoftWindowsPowerShellV2Root - UNVERIFIED here, no client host has run this. Scripts must DISCOVER the feature set with a wildcard rather than hard-coding names, or they silently match nothing on the SKU they were not written for. Disable-/Enable-WindowsOptionalFeature -NoRestart round-tripped the feature on the lab with no restart required for this SKU."
+    },
+    {
+      "id": "eventlog-channelaccess-masks",
+      "status": "verified-lab",
+      "source": "decoded the live descriptors on the lab and confirmed functionally",
+      "notes": "Event channel access masks: 0x1 read, 0x2 write, 0x4 CLEAR, 0xF0000 the standard rights. Server 2019 Security channel as shipped: SYSTEM 0xF0005, BUILTIN\\Administrators 0x5 (read+CLEAR), Event Log Readers 0x1 - so an administrator can erase the Security log and needs no WRITE_DAC to do it. PROVEN functionally: after removing 0x4 from Administrators, 'wevtutil cl Application' returns exit 5 'Access is denied.', and after rollback it returns 0 again."
+    },
+    {
+      "id": "sddl-removeaccess-fails-silently",
+      "status": "verified-lab",
+      "source": "measured on the lab",
+      "notes": "TRAP, and the one that produced a published defect in this project's predecessor. DiscretionaryAcl.RemoveAccess('Allow', sid, 0x4, 'None') left the Administrators mask at 0x7 UNCHANGED while happily regenerating a valid-looking descriptor - the API returned no error and removed nothing. Use SetAccess with an explicitly computed mask, then RE-READ the descriptor and assert the bit is gone. Never trust an ACL helper's return."
+    },
+    {
+      "id": "sddl-text-is-not-comparable",
+      "status": "verified-lab",
+      "source": "measured on the lab",
+      "notes": ".NET regenerates a descriptor using rights abbreviations (CCDCLC) where Windows prints hex (0x7). Identical meaning, completely different text. Comparing descriptors as STRINGS therefore reports a change that did not happen and rewrites the channel on every run. All comparison must decode to per-SID masks."
+    },
+    {
+      "id": "eventlog-retention-is-reg-sz",
+      "status": "verified-admx-and-lab",
+      "source": "EventLog.admx enabledValue is <string>1</string>; written and read back on the lab",
+      "notes": "Retention and AutoBackupLogFiles are REG_SZ, not DWord. Semantics from Microsoft's own ADML help text: Retention enabled + log full = 'new events are not written to the log and are lost' - the log STOPS RECORDING. AutoBackupLogFiles only takes effect when Retention is enabled, and turns a full log into a renamed archive plus a fresh file. So Retention alone is the worst available setting, and Retention plus AutoBackup is the only combination that loses nothing. Write AutoBackup FIRST so the pair never passes through the dangerous state."
+    },
+    {
+      "id": "eventlog-policy-overrides-local-config",
+      "status": "verified-lab",
+      "source": "measured on the lab",
+      "notes": "The MaxSize registry policy overrides the channel's local configuration: 'wevtutil sl <ch> /ms:1052672' did not stick while the policy specified 262144 KB. Consequence for testing: a log rollover cannot be forced by shrinking the channel while the policy is in place. This is why the archive file-naming pattern remains unobserved, and why no automatic archive purge is implemented."
+    },
+    {
+      "id": "prefetch-not-a-policy",
+      "status": "verified-lab",
+      "source": "Select-String across C:\\Windows\\PolicyDefinitions\\*.admx on the lab",
+      "notes": "EnablePrefetcher is NOT a Group Policy setting - no ADMX on the target OS declares it. Unlike every other registry value in this toolkit its location cannot be cited to a policy definition, so it is cited to Microsoft documentation and its EFFECT was measured instead. Key: HKLM\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management\\PrefetchParameters, value EnablePrefetcher, REG_DWORD, 0 disabled / 1 application launch / 2 boot / 3 both."
+    },
+    {
+      "id": "prefetch-does-not-work-on-fast-media",
+      "status": "verified-lab",
+      "source": "measured repeatedly on the lab (Server 2019, NVMe SSD)",
+      "notes": "IMPORTANT LIMIT on what Enable-ServerPrefetch can deliver. On a host whose system volume reports MediaType SSD / BusType NVMe / SpindleSpeed 0: EnablePrefetcher=3 was written and read back, SURVIVED the reboot itself, and was then REMOVED again a few minutes into normal operation - observed twice - with NO Group Policy applied (gpresult reported 'N/A') and no AWS agent config referencing prefetch. No .pf file was ever produced, and SysMain was Running and Automatic throughout, so a stopped service was NOT the cause. Windows is understood to disable prefetching on fast media; that is CONSISTENT with what was measured but NOT proven here, because proving it needs a host with rotational media and none was available. Practical consequence: on modern SSD-backed servers, do not promise an MSP that Prefetch will record execution history. Absence of .pf is itself the DFIR-relevant finding."
+    },
+    {
+      "id": "mode-is-a-reserved-variable-name",
+      "status": "verified-lab",
+      "source": "measured on the lab",
+      "notes": "TRAP for any script built on docs/SCRIPT-TEMPLATE.ps1. PowerShell variable names are case-insensitive and its scoping is dynamic, so the shared Invoke-Main's local '$mode' (holding Audit/Apply/Rollback) MASKS a script PARAMETER named $Mode inside every function Invoke-Main calls. A -Mode parameter silently received the string 'Audit' instead of its own value, and a hashtable lookup on it returned null. '$mode' is effectively reserved: name script parameters something else."
+    },
+    {
+      "id": "transcription-locks-the-toolkit-root",
+      "status": "verified-lab",
+      "source": "observed on the lab while trying to archive the toolkit root",
+      "notes": "Side effect of our own hardening, worth knowing before an MSP hits it. Once Enable-IRVisibility points PowerShell transcription at <ToolkitRoot>\\Transcripts, every live PowerShell session holds a transcript file open in there - so the toolkit root cannot be moved or deleted while any session is running, even by an Administrator: Move-Item fails with 'Access to the path is denied'. Practical consequences: (1) an operator wanting to relocate or clean the toolkit root must roll back transcription first, or do it from a non-PowerShell context; (2) it incidentally makes the evidence directory harder to remove, which is not an accident worth relying on but is a mild bonus; (3) any future script that tries to tidy the toolkit root must expect this and report it rather than assuming a delete succeeded."
+    },
+    {
+      "id": "wef-forwarding-channel-name",
+      "status": "verified-lab",
+      "source": "wevtutil el on the lab, Windows Server 2019 build 17763",
+      "notes": "Settles a contradiction between Microsoft's documentation and the host. The WEF walkthrough names the forwarder's channel 'Microsoft-Windows-Eventlog-ForwardingPlugin/Operational'. On Server 2019 that channel DOES NOT EXIST; what exists is 'Microsoft-Windows-Forwarding/Operational' (plus a /Debug sibling), confirmed both by enumeration and by probing each name directly. Enable-WefClient probes both and reports whichever is present, which is the right behaviour - but any script or runbook that hard-codes the documented name will silently find nothing on this OS version. Also measured at the same time: Wecsvc is present but Stopped/Manual on a plain member server, the ForwardedEvents channel exists with enabled=false, and the SubscriptionManager policy key does not exist by default."
+    },
+    {
+      "id": "ad-security-context-differs-by-caller",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-25 on the lab.example lab: DC LAB-DC (<lab DC>) and member LAB-MEMBER (<lab member>), both Server 2019 17763.",
+      "notes": "[adsisearcher] succeeds or fails purely on the CALLER's security context, and the failure text is 'The specified domain either does not exist or could not be contacted' - which reads like a DNS or connectivity fault and is not one. Measured three ways: (1) on the DC, SSH as Administrator resolves to LAB\\Administrator, a DOMAIN account (RID 500) - adsisearcher works, RootDSE resolves. (2) on the MEMBER, SSH as Administrator resolves to the LOCAL LAB-MEMBER\\Administrator - adsisearcher FAILS and \\\\domain\\SYSVOL gives Access is denied. (3) on the MEMBER as SYSTEM via a scheduled task - adsisearcher WORKS, because SYSTEM authenticates to the network as the computer account, which is a domain principal. Consequence for validation: the AD-facing scripts CANNOT be tested by SSH-ing to a member as its local Administrator, and a failure there is the harness's context, not a script defect. Test them on the DC, or as SYSTEM, which is also the RMM-realistic path."
+    },
+    {
+      "id": "promotion-leaves-dead-ipv6-forwarders",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-25 on LAB-DC after Install-ADDSForest on Server 2019 17763.",
+      "notes": "After promotion the DNS server's forwarder list was 'fec0:0:0:ffff::1, fec0:0:0:ffff::2, fec0:0:0:ffff::3, <lab resolver>' - Windows' IPv6 site-local defaults IN FRONT of the working resolver. Nothing answers them, each costs the 3s forwarder timeout, and the DC returned 'DNS server failure' for learn.microsoft.com despite already having a valid forwarder configured. Replacing the list with the single working address fixed it immediately. So a forwarder being PRESENT is not a forwarder being USED: verify by resolving something."
+    },
+    {
+      "id": "second-nic-breaks-dns-binding-on-a-dc",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-25 on LAB-DC, Server 2019 17763, with a Tailscale TUN adapter holding 169.254.83.107.",
+      "notes": "A second interface with an APIPA address made the DNS server log events 408 and 404 on every start - 'could not open socket for address 169.254.83.107' - because it binds to all interfaces. It had NOT registered that address in the domain zone (RegisterThisConnectionsAddress was already False), which is the failure that would actually break member lookups. Stopping the Tailscale service REMOVED the adapter entirely rather than merely disabling it, and after a DNS service restart the 408/404 errors stopped completely while the domain and external resolution both kept working."
+    },
+    {
+      "id": "add-computer-restart-is-asynchronous",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-25 joining LAB-MEMBER to lab.example, Server 2019 17763.",
+      "notes": "Add-Computer -Force -Restart RETURNS and the script continues; the restart is asynchronous. Code that treats reaching the next line as a failure reports a successful join as unexpected - measured, the host was unreachable ten seconds later and back as DomainRole 3 ten seconds after that. Also settled by the same run: key-based SSH through administrators_authorized_keys KEEPS WORKING after a domain join, which had been an explicit UNVERIFIED risk."
+    },
+    {
+      "id": "machine-account-quota-allows-unprivileged-join",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-25 on lab.example: ms-DS-MachineAccountQuota = 10 on a default Server 2019 forest. https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/manage/component-updates/ms-ds-machineaccountquota",
+      "notes": "The default quota is 10, so an ordinary Domain User can join a computer to the domain - no Domain Admins membership required. The lab's join account lab-join is a plain Domain User and the join succeeded. Worth knowing in both directions: it is the least-privilege path for tooling, and it is also an attack surface, since any authenticated user can create up to ten computer accounts."
+    },
+    {
+      "id": "createjournal-silently-declines",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-25 on LAB-MEMBER, Server 2019 17763, 80 GB volume with 54 GB free, journal at 4 GiB.",
+      "notes": "fsutil usn createjournal EXITS 0 AND DOES NOTHING for any size it will not apply. Requesting 5 GiB, 6 GiB and 8 GiB each exited 0 and left Maximum Size, Allocation Delta and First Usn untouched; requesting 32 MiB and 64 MiB (smaller) did the same. So its exit code is not a statement about whether the size changed - only a read-back is. Consequence: growing a journal past whatever the host will grant is impossible AND unreportable from the exit code, and shrinking one is impossible at all, which makes an enlargement irreversible."
+    },
+    {
+      "id": "no-securitymasks-on-directoryentry",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-25 on the lab.example DC, Server 2019 17763, PS 5.1.",
+      "notes": "DirectoryEntry.Options (a DirectoryEntryConfiguration) has NO SecurityMasks property - setting it throws \"The property 'SecurityMasks' cannot be found on this object\", before AND after forcing a bind via NativeObject. SecurityMasks exists on DirectorySearcher only. And DirectoryEntry.ObjectSecurity is not a workaround: it reported ZERO audit rules on an object carrying two, and AddAuditRule on it threw \"The system acl cannot be modified as it was not retrieved from the backend store.\" The working path is DirectorySearcher with SecurityMasks including Sacl, reading ntSecurityDescriptor, then ActiveDirectorySecurity.SetSecurityDescriptorBinaryForm - proven against AdminSDHolder, a 1,356-byte descriptor carrying the 3 audit rules AD ships. Writing back means setting ntSecurityDescriptor to GetSecurityDescriptorBinaryForm() and CommitChanges; proven to add one audit rule with the DACL byte-identical afterwards."
+    },
+    {
+      "id": "addauditrule-merges-into-existing-ace",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-25 on CN=AdminSDHolder,CN=System in the lab.example domain.",
+      "notes": "ActiveDirectorySecurity.AddAuditRule MERGES a new rule into an existing ACE for the same SID, audit flags and inheritance scope, ORing the rights masks - it does not add a second ACE. AdminSDHolder shipped an explicit 0xC0020 Success/None audit ACE; adding 0xD016B Success/None produced ONE ACE at 0xD016B, because 0xC0020 -bor 0xD016B = 0xD016B. That also makes it idempotent - adding the same rule twice left the count unchanged. THE DANGEROUS CONSEQUENCE: a rollback that removes 'the rule we added' removes the pre-existing ACE with it, because they are now the same ACE. On AdminSDHolder that is the loss of a pre-existing audit setting on the object that controls the ACLs of every protected group in the domain, and it had to be restored by hand."
+    },
+    {
+      "id": "wef-source-initiated-not-established",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-25 between LAB-MEMBER (source) and LAB-DC (collector), both Server 2019 17763, same subnet, lab.example.",
+      "notes": "Collector side verified good: Wecsvc Running/Automatic, ForwardedEvents enabled at 2 GiB, subscription IronBlackBox-Baseline SourceInitiated/Enabled with RunTimeStatus Active and LastError 0, Event Forwarding Plugin registered and Enabled with ResourceUri http://schemas.microsoft.com/wbem/wsman/1/windows/EventLog, AllowedSourceDomainComputers granting Domain Computers and Network Service. Source side verified good: subscription manager policy value registered, NETWORK SERVICE granted read on Security, TCP 5985 to the collector reachable and resolving to the right host. Forwarding still does NOT establish: the source logs Microsoft-Windows-Forwarding/Operational event 105 with error 2150859027, 'The WinRM client sent a request to an HTTP server and got a response saying the requested HTTP URL was not available.' Both hosts have WinRM AllowUnencrypted=false with Kerberos and Negotiate enabled. Not yet diagnosed. Note that a raw unauthenticated POST to /wsman/SubscriptionManager/WEC returns HTTP 404 while /wsman returns 401, and that is NOT evidence of a broken endpoint - WinRM routes authenticated WS-Man envelopes, so the raw probe proves nothing."
+    },
+    {
+      "id": "ds-access-sacl-produces-5136-4662",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-25 on LAB-DC, the lab.example DC, Server 2019 17763.",
+      "notes": "With Directory Service Access and Directory Service Changes both set to Success and Failure, and an explicit Everyone audit ACE (rights 0xD016B, Success) on OU=Domain Controllers, setting a description on that OU produced 8 x event 5136 ('a directory service object was modified') and 10 x event 4662 ('an operation was performed on an object') in the Security log within eight seconds, each naming the account responsible. Both halves are required: the audit policy alone logs nothing without the SACL, and the SACL alone logs nothing without the policy."
+    },
+    {
+      "id": "server2019-default-audit-policy",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-26 on LAB-MEMBER (member) and LAB-DC (DC), Server 2019 17763.9121, via 'auditpol /backup'.",
+      "notes": "Windows Server 2019 enables 17 audit subcategories out of the box: Account Lockout 1, Audit Policy Change 1, Authentication Policy Change 1, Computer Account Management 1, Credential Validation 1, Directory Service Access 1, Kerberos Authentication Service 1, Kerberos Service Ticket Operations 1, Logoff 1, Logon 3, Network Policy Server 3, Other System Events 3, Security Group Management 1, Security State Change 1, Special Logon 1, System Integrity 3, User Account Management 1. Neither host had an audit.csv at the local GPO path or at C:\\Windows\\security\\audit\\audit.csv, so this is the built-in default and not GPO-delivered. Consequence for the toolkit: several Enable-IRVisibility targets are PINNING a default rather than adding new logging."
+    },
+    {
+      "id": "event-4703-belongs-to-token-right-adjusted",
+      "status": "verified-lab",
+      "source": "A/B measured 2026-08-25 on LAB-MEMBER, each subcategory enabled alone under identical WMI/vssadmin/tasklist load for ~30s.",
+      "notes": "Token Right Adjusted {0CCE924A} alone produced 104 x 4703. Authorization Policy Change {0CCE9231} alone produced 0 x 4703. Both off produced 0. The learn.microsoft.com page for Audit Authorization Policy Change lists 4703 in its event list; on Server 2019 that is wrong. This is why Token Right Adjusted is excluded (volume) and Authorization Policy Change is enabled (it is low-volume without 4703)."
+    },
+    {
+      "id": "event-5447-belongs-to-other-policy-change-events",
+      "status": "verified-lab",
+      "source": "A/B measured 2026-08-25 on LAB-MEMBER against a single 'gpupdate /force'; host carried 484 WFP filters.",
+      "notes": "Other Policy Change Events {0CCE9234} at Success produced 630 x 5447 per gpupdate. Filtering Platform Policy Change {0CCE9233} at Success produced 0 x 5447. The same subcategory at Failure ONLY produced 0 x 5447 while remaining able to log 6145. This is why Enable-IRVisibility sets it to 2 (Failure) rather than Logmira's 3."
+    },
+    {
+      "id": "4704-is-privileges-4717-is-logon-rights",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-26 on LAB-MEMBER with Authorization Policy Change and Authentication Policy Change both enabled; rights granted via secedit.",
+      "notes": "Granting SeDebugPrivilege (a privilege) produced 4704 'a user right was assigned' plus 4717/4718. Granting SeBatchLogonRight (a logon right) produced ONLY 4717 'system security access was granted', no 4704. So 4704/4705 come from Authorization Policy Change and cover privileges, while logon-right grants surface as 4717/4718 under Authentication Policy Change. A test that grants a logon right and expects 4704 will wrongly conclude the subcategory is dead."
+    },
+    {
+      "id": "eventlog-maxsize-needs-policy-refresh",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-26 on LAB-MEMBER.",
+      "notes": "Writing MaxSize=2097152 to HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\EventLog\\Security does not change the running channel immediately: 'wevtutil gl Security' still reported the previous maxSize 1073741824. After 'gpupdate /force' it reported 2147483648, exactly 2097152 * 1024. This re-confirms the unit is KILOBYTES and adds that the channel reflects the policy only after a policy refresh - so a read-back of the channel straight after -Apply is not proof the size did not take."
+    },
+    {
+      "id": "audit-group-membership-is-one-per-logon",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-25/26 on LAB-MEMBER and LAB-DC.",
+      "notes": "With Group Membership {0CCE9249} at Success, event 4627 tracked event 4624 exactly 1:1 across three independent windows (member 44/44, DC 41/41, fresh logon 2/2). 4627 requires Audit Logon to be enabled as well. This is the volume cost to plan for: it roughly doubles the per-logon record."
+    },
+    {
+      "id": "auditpol-get-r-has-no-numeric-column",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-26 on LAB-MEMBER.",
+      "notes": "'auditpol /get /category:* /r' emits header 'Machine Name,Policy Target,Subcategory,Subcategory GUID,Inclusion Setting,Exclusion Setting' - six columns, no numeric Setting Value, and the Inclusion Setting is LOCALISED text such as 'No Auditing'. Only 'auditpol /backup' carries the numeric column. Any state read must use /backup; a parser written against /get will silently read empty values and report every subcategory as changed."
+    },
+    {
+      "id": "eventlog-sizing-needs-gpupdate-not-reboot",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-26 on LAB-MEMBER with a distinctive value (1572864 KB) nothing else uses. SUPERSEDES the 2026-08-23 note in docs/VALIDATION.md that said a reboot was required.",
+      "notes": "Writing MaxSize to the Security policy key left the channel unchanged, and unchanged after a 3s wait. After 'gpupdate /target:computer /force' the channel reported maxSize 1610612736 = 1572864 * 1024 exactly. So Security channel sizing needs a COMPUTER POLICY REFRESH, not a reboot. The 2026-08-23 entry claimed a reboot was required; that claim is withdrawn for event log sizing. The firewall-logging half of that original note was NOT re-tested and still stands."
+    },
+    {
+      "id": "eventlog-channel-keeps-size-after-policy-removal",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-26 on LAB-MEMBER.",
+      "notes": "Removing MaxSize from the Security policy key and running gpupdate did NOT return the channel to the Windows default of 20971520 bytes - it stayed at the last applied size (1073741824). Consequence for Enable-IRVisibility: -Rollback restores the POLICY VALUE to its recorded previous state, but the channel keeps whatever size it was last given. The log stays large. This is not harmful, but 'rollback returned the host to baseline' is not literally true for channel size, and Test-VisibilityDrift cannot see it because it compares the policy value."
+    },
+    {
+      "id": "wevtutil-gl-reports-logfilename",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-26 on LAB-MEMBER, Server 2019 17763.9121.",
+      "notes": "'wevtutil gl <channel>' emits, indented under a 'logging:' heading, 'logFileName: %SystemRoot%\\\\System32\\\\Winevt\\\\Logs\\\\Security.evtx' and 'maxSize: 1073741824'. The path keeps its environment variable UNEXPANDED, so a caller must run it through ExpandEnvironmentVariables before touching the filesystem. This is how Enable-IRVisibility finds the volume a channel actually lands on instead of assuming C: - a channel can be relocated to another disk, and sizing it then authorises growth on a volume that was never measured. UNVERIFIED: whether the 'logFileName' key name is localised on a non-English host; the code fails closed if the key is not found."
+    },
+    {
+      "id": "gate-passes-undefined-variable",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-26. tools/check.ps1 run against a deliberately broken copy; the throw behaviour measured on LAB-MEMBER under Windows PowerShell 5.1.",
+      "notes": "tools/check.ps1 PASSES a script whose Apply branch reports a variable nothing ever assigns - BOM, AST parse, banned-syntax and PSScriptAnalyzer all green. On the host, with 'Set-StrictMode -Version 1.0' and $ErrorActionPreference='Stop', '[string] $verified' where $verified was never set THROWS: \"The variable '$verified' cannot be retrieved because it has not been set.\" So the failure lands at the last line of an otherwise successful -Apply and turns a completed run into an execution error. The Main region is explicitly excluded from the helper drift check (tools/check.ps1:372), so no gate check covers it."
+    },
+    {
+      "id": "changeindex-counts-intents-not-changes",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-26 on LAB-MEMBER with Enable-UsnJournalTracking -Apply -MaxSizeBytes 5368709120 against a journal already at 4 GiB.",
+      "notes": "$script:ChangeIndex is incremented by Write-ManifestChange, which docs/DESIGN.md section 4 requires to be flushed BEFORE the change it describes. It therefore counts INTENTS, not changes that landed. Reporting it as 'change(s) applied' produced the U-3 contradiction: '[find] journal is UNCHANGED' immediately followed by '[ok] 1 change(s) applied and recorded'. The verified number is what Invoke-HostCheck returns; every script discarded it with [void]. Note Set-TimelineIntegrity's Invoke-HostCheck returns an OBJECT (ChangeCount property), not a bare count - a uniform edit across the suite breaks on it."
+    },
+    {
+      "id": "labcycle-cannot-see-a-noop-apply",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 on LAB-MEMBER against Set-TimelineIntegrity, Enable-Sysmon and Protect-ForensicArtifacts.",
+      "notes": "lab/Invoke-LabCycle.sh judged the rollback step by grepping stdout for the literal 'Rollback complete'. When the first -Apply is a legitimate no-op (0 change(s) applied on a host already in the wanted state) the script correctly prints 'Nothing to roll back: no eligible run for this script in the manifest', and the harness reported that as a defect - three at once, filed as R-2 against the scripts. Fixed by making the expectation conditional on whether the apply changed anything, AND by printing an explicit NOT PROVEN block when it did not: accepting the decline silently would produce a 6/6 that never exercised rollback and cannot support an L3 claim. Second false failure this harness has produced."
+    },
+    {
+      "id": "lab-sysmon-staged-location",
+      "status": "verified-lab",
+      "source": "Staged 2026-08-27 on LAB-MEMBER.",
+      "notes": "Sysmon64.exe is staged at C:\\\\lab-staging\\\\Sysmon64.exe with a minimal lab config at C:\\\\lab-staging\\\\sysmonconfig.xml (schemaversion 4.90, ProcessCreate and ProcessTerminate onmatch=exclude - accepted by the binary). Get-AuthenticodeSignature reports Status=Valid, subject 'CN=Microsoft Windows Publisher, O=Microsoft Corporation', so Enable-Sysmon's signature gate passes. Exercise the script with: --apply-args \"-SysmonPath C:\\\\lab-staging\\\\Sysmon64.exe -ConfigPath C:\\\\lab-staging\\\\sysmonconfig.xml\". Without a staged binary and a -ConfigPath the script installs nothing by design, so its rollback cannot be exercised at all."
+    },
+    {
+      "id": "wef-svchost-split-breaks-source-initiated",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in BOTH directions on LAB-DC (collector, 7.9 GB RAM) with LAB-MEMBER as the source.",
+      "notes": "Above roughly 3.5 GB of RAM Windows hosts each service in its own svchost process. WinRM then owns the single URL reservation 'HTTP://+:5985/WSMAN/' and Wecsvc, in a different process, CANNOT register 'HTTP://+:5985/WSMAN/SUBSCRIPTIONMANAGER/WEC/'. A source enumerating resourceUri http://schemas.microsoft.com/wbem/wsman/1/SubscriptionManager/Subscription is answered by WinRM, which has no handler for that sub-path, and gets WS-Man 2150859027 'the requested HTTP URL was not available' - surfaced as event 105 in Microsoft-Windows-Forwarding/Operational. SPLIT: Wecsvc PID 3200, WinRM PID 3088, one reservation. MERGED (SvcHostSplitDisable=1 under BOTH Services\\\\Wecsvc AND Services\\\\WinRM, then a REBOOT): both PID 776, three reservations including SUBSCRIPTIONMANAGER/WEC. Setting it on Wecsvc alone is NOT enough - measured, a service restart is not enough either, svchost grouping is decided at boot. After merging: WinRM event 142 'Enumeration failed 2150859027' became 132 'Enumeration completed successfully', wecutil gr gained an EventSources section with heartbeats, and 145 events forwarded end to end."
+    },
+    {
+      "id": "wecutil-gr-active-means-nothing-without-eventsources",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 on LAB-DC, before and after the W-1 fix.",
+      "notes": "'wecutil gr <name>' reported 'RunTimeStatus: Active' and 'LastError: 0' for the entire period during which NO source could reach the collector at all. Those two fields describe the SUBSCRIPTION, not whether anything uses it. The signal that a source has actually connected is the presence of an 'EventSources' section listing each source with its own RunTimeStatus and LastHeartbeatTime - absent while W-1 was unfixed, present afterwards. A collector health check built on RunTimeStatus/LastError is green throughout total failure."
+    },
+    {
+      "id": "forwarding-channel-name-on-server-2019",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 on LAB-MEMBER via 'wevtutil el'.",
+      "notes": "On Windows Server 2019 the source-side forwarder channels are 'Microsoft-Windows-Forwarding/Operational' and 'Microsoft-Windows-Forwarding/Debug'. The channel named in Microsoft's source-initiated walkthrough, 'Microsoft-Windows-Eventlog-ForwardingPlugin/Operational', DOES NOT EXIST on this build - it is absent from 'wevtutil el'. Enable-WefClient probes both and takes the first present, so it reads the right one. Microsoft-Windows-Forwarding/Debug has NO format information on this build: its events render as 'Unknown( n ): GUID=... (No Format Information found)', so it is useless for diagnosis."
+    },
+    {
+      "id": "network-service-reads-security-records-not-metadata",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 on LAB-MEMBER, running genuinely as NT AUTHORITY\\\\NETWORK SERVICE via a scheduled task.",
+      "notes": "With ONLY the channel ACE '(A;;CC;;;NS)' on Security and NO membership in Event Log Readers, NETWORK SERVICE: 'Get-WinEvent -ListLog Security' FAILS ('Attempted to perform an unauthorized operation'); 'Get-WinEvent -FilterHashtable @{LogName=Security}' FAILS with the same message because Get-WinEvent queries log INFORMATION first; 'wevtutil qe Security /c:1' exits 0 and returns a real event; and the raw System.Diagnostics.Eventing.Reader.EventLogReader API returns event 4648. So NETWORK SERVICE CAN read Security RECORDS and CANNOT read Security log METADATA. Consequence for diagnosis: Get-WinEvent is the WRONG probe for 'can this identity read that log' - it measures metadata access. Adding NETWORK SERVICE to Event Log Readers is NOT required; the token gains S-1-5-32-573 immediately in a new process, and the read behaviour is identical with and without it."
+    },
+    {
+      "id": "wef-security-not-forwarded-is-query-content",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 between LAB-MEMBER and LAB-DC by building isolation subscriptions that change one variable at a time.",
+      "notes": "Defect W-2. Security events DO forward: 4688 x20 and 4624 x9 arrived, all timestamped after a test subscription was created and NONE before, so the toolkit's own subscription genuinely never forwarded Security. The cause is the SUBSCRIPTION QUERY CONTENT, proven by a two-way split: the baseline query verbatim with fast delivery settings gets event 101 'one or more channels in the query could not be read', while a short query with the baseline's delivery settings gets event 100 'created successfully'. Eliminated inside the query: each channel alone (Security / System / PowerShell-Operational) -> 100; all three channels with short ID lists -> 100; ReadExistingEvents=false -> 100; System with its full 6-id list -> 100; PowerShell with its full 4-id list -> 100. A clone of the baseline config under a different SubscriptionId reproduces the 101, so it is configuration and not per-instance state. Remaining suspect: the Security select with all 26 event IDs, in combination. Weak observation to re-test in isolation: that variant produced NO source-side event at all and left EventSources empty, but it was measured with 14 subscriptions live."
+    },
+    {
+      "id": "out-null-hides-native-tool-failure",
+      "status": "verified-lab",
+      "source": "Observed 2026-08-27 while cleaning up test subscriptions on LAB-DC.",
+      "notes": "'wecutil ds <id> /q:true' fails - /q is not valid for the ds verb - but the failure was piped to Out-Null, so a cleanup loop reported success for 13 deletions that had not happened. Dropping the same command's output AND its exit code turns a broken step into a silent no-op. This is the same trap as 'a native tool's exit code is not a claim about its output', one level worse: here both were discarded."
+    },
+    {
+      "id": "wef-event-window-verdict-is-not-a-measurement",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 on LAB-MEMBER while bisecting W-2.",
+      "notes": "A WEF diagnosis harness that judges a subscription by 'did event 100 or 101 appear on the source within 80 seconds' is NOT deterministic. The same 24-event-id query returned OK on one run and NO EVENT on a later identical run, with the control (2 ids) passing in between - so the instrument, not the host, produced the difference. An ABSENCE of an event within a window is never a verdict. The reliable signal is COLLECTOR STATE: poll 'wecutil gr <name>' for an EventSources section naming the source. With that instrument the control registered in 15 seconds and a Security-only query carrying all 26 baseline event IDs also registered in 15 seconds. A bisect built on the event-window verdict produced a false 24-ok/25-fail threshold and was retracted."
+    },
+    {
+      "id": "wef-security-select-26-ids-is-fine",
+      "status": "RETRACTED",
+      "source": "Measured 2026-08-27 between LAB-MEMBER and LAB-DC using a collector-state verdict. RETRACTED 2026-09-02: the instrument was unsound, by the same measurement recorded under wef-event-window-verdict-is-not-a-measurement. Superseded by event-log-xpath-select-holds-at-most-23-eventid-terms, which is the fact the fix was built on.",
+      "notes": "RETRACTED - kept so the wrong conclusion is not re-derived. The claim below is FALSE: the number of EventID terms WAS the cause of W-2. All 26 ids sat in a single <Select>, over the 20-expression ceiling Microsoft documents; the source silently dropped the Security channel and kept delivering the other two. Chunking the ids across several Select elements fixed it and the subscription reached verdict 100 for the first time. Original text follows. --- A source-initiated subscription whose Security select carries ALL 26 event IDs from the IronBlackBox baseline query registers normally - event 100, source registered within 15s. So neither the number of EventID terms nor any single one of those ids is the cause of W-2. Also measured: the baseline subscription is permanently in the event-101 state ('one or more channels in the query could not be read'), and in that state it forwards Microsoft-Windows-PowerShell/Operational but NOT Security. Every test subscription that received event 100 forwarded Security correctly. So the defect is whatever in the baseline query produces the 101, and a verbatim clone of that subscription under a different SubscriptionId reproduces it while a three-channel query with short id lists does not."
+    },
+    {
+      "id": "wef-source-verdict-event-is-not-reliably-emitted",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 on LAB-MEMBER across roughly 20 subscription-creation rounds.",
+      "notes": "After creating a source-initiated subscription on the collector and restarting WinRM on the source, the source does NOT reliably emit a verdict event (100 created / 101 channel unreadable / 102 cannot create) for that subscription, even when polled for 300 seconds. Some rounds produce a verdict in 15s, others produce nothing at all for the same query. Consequence: no per-round experiment on W-2 can be judged this way, and the 24-ok/25-fail threshold produced by such a harness was retracted. Judging registration by collector state ('wecutil gr' EventSources) IS reliable but does NOT discriminate the 101 state - the baseline subscription is registered and heartbeating while permanently at 101. A different observable is needed: measure whether Security events actually arrive under sustained real load, rather than churning synthetic subscriptions. SUPERSEDED IN PART 2026-08-27: this is true of waiting passively, and false of forcing a re-subscription - see forcing-a-wef-resubscription-makes-the-source-verdict-deterministic. The suggestion at the end of this note (measure whether Security events actually arrive under real load) is what found W-2."
+    },
+    {
+      "id": "wef-security-query-stalls-independently-of-the-subscription",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in the Atomic Red Team validation exercise on LAB-MEMBER (member, Server 2019 build 17763.9121) and LAB-DC (DC). Evidence: the Atomic exercise records kept in the development repository.",
+      "notes": "On a source-initiated subscription whose QueryList has three Query nodes (Security, System, PowerShell/Operational), the Security node can stop delivering while the others keep delivering. Measured: 1036 Security-provider events forwarded successfully (IDs exactly the subscription's Security list, including 602 x 4688), newest by original timestamp 2026-08-27 12:59:24Z; PowerShell/Operational continued to 15:12:50Z. Of 6000+ Security events generated at 14:49-14:58Z, zero arrived. 'wecutil gr' reported RunTimeStatus Active, LastError 0 and a fresh heartbeat throughout, so the health indicator does NOT reflect a per-query stall. Restarting WinRM on the source did not clear it: markers planted in 4688 before and after the restart never arrived over 7 minutes of polling. Log archiving was refuted as the trigger (no 1105/1104; newest Archive-Security-*.evtx from 08-25)."
+    },
+    {
+      "id": "nslookup-does-not-use-the-dns-client-service",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in the Atomic Red Team validation exercise on LAB-MEMBER (member, Server 2019 build 17763.9121) and LAB-DC (DC). Evidence: the Atomic exercise records kept in the development repository.",
+      "notes": "nslookup.exe builds and sends its own DNS queries and does NOT go through the Windows DNS Client service, so Microsoft-Windows-DNS-Client/Operational records nothing for it. Measured: 255 nslookup.exe invocations across a /24 produced 255 x 4688 but only 120 x 3006 covering 8 distinct names, of which exactly ONE was an in-addr.arpa lookup (the rest were the DC FQDN, an AWS endpoint, wpad, wdcp.microsoft.com, Windows Update). Consequence: Enable-DnsVisibility does not see nslookup/dig-style reconnaissance at all; command-line auditing in 4688 is the only record."
+    },
+    {
+      "id": "samr-enumeration-produces-no-4662-or-5145",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in the Atomic Red Team validation exercise on LAB-MEMBER (member, Server 2019 build 17763.9121) and LAB-DC (DC). Evidence: the Atomic exercise records kept in the development repository.",
+      "notes": "'net user /domain' and 'net group \"Domain Admins\" /domain' against a DC with Directory Service Access at Setting Value 3 and Enable-AdObjectAuditing applied produced 4662: 0 and 5145: 0. Those tools use SAMR over named pipes, not LDAP, and read CN=Users, which carries no SACL; the SACLs Enable-AdObjectAuditing places (AdminSDHolder, GPO container, DC OU) are not on that path. The DC records only the authentication: 3 x 4624/4627/4634 for the enumerating account, type 3 Kerberos. WHAT was enumerated exists only in the source host's 4688 command line."
+    },
+    {
+      "id": "4688-does-not-link-a-wmi-spawned-child-to-its-requester",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in the Atomic Red Team validation exercise on LAB-MEMBER (member, Server 2019 build 17763.9121) and LAB-DC (DC). Evidence: the Atomic exercise records kept in the development repository.",
+      "notes": "'wmic process call create notepad.exe' produced three 4688s: cmd.exe (PID 0x82c), WMIC.exe (PID 0x8b4, creator 0x82c, subject Administrator), and notepad.exe (PID 0x794, creator 0x6b4 = WmiPrvSE.exe, subject the MACHINE account LAB-MEMBER$, logon 0x3e4). No field links notepad.exe to the wmic.exe that requested it; Microsoft-Windows-WMI-Activity/Operational held only 5857 provider-start records, not the operation. Attribution rests on a 76 ms interval and on the wmic command line naming the target. By contrast a service-installed binary IS linkable, because 4697 names the service, its binary path and the installing account."
+    },
+    {
+      "id": "auditpol-tampering-cannot-suppress-its-own-4688-events",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in the Atomic Red Team validation exercise on LAB-MEMBER (member, Server 2019 build 17763.9121) and LAB-DC (DC). Evidence: the Atomic exercise records kept in the development repository.",
+      "notes": "T1685.001 runs three 'auditpol /set /category:' commands and disables Detailed Tracking LAST. All three produced 4688 with their exact command lines, because Process Creation auditing was still active when each process started - including the process that disabled it. The tamper also produced 13 x 4719, one per affected subcategory, each naming the actor SID, account and logon ID. In the RENDERED message 4719 names Category and Subcategory in text; in the raw XML they appear as resource codes (%%8276, %%13316), so an XML export loses the names unless they are resolved."
+    },
+    {
+      "id": "scriptblock-and-module-logging-both-record-the-deobfuscated-script",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in the Atomic Red Team validation exercise on LAB-MEMBER (member, Server 2019 build 17763.9121) and LAB-DC (DC). Evidence: the Atomic exercise records kept in the development repository.",
+      "notes": "'powershell.exe -e <base64>' decoding to a string-concatenation wrapper around Invoke-Expression was recovered independently by THREE controls: 4104 wrote two events, one with the obfuscated layer and one with the fully deobfuscated 'Write-Host ...'; 4103 module logging wrote the CommandInvocation chain with ContextInfo naming 'Host Application = powershell.exe -e <blob>' and the bound parameter VALUES; and the transcript file recorded the decoded line plus its output. Base64 plus string concatenation defeats none of the three."
+    },
+    {
+      "id": "4698-carries-the-complete-scheduled-task-xml",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in the Atomic Red Team validation exercise on LAB-MEMBER (member, Server 2019 build 17763.9121) and LAB-DC (DC). Evidence: the Atomic exercise records kept in the development repository.",
+      "notes": "Creating a task with 'SCHTASKS /Create /SC ONCE /TN spawn /TR C:\\windows\\system32\\cmd.exe /ST 20:10' produced a 4698 whose TaskContent field held 1603 bytes of task XML: the Exec Command, the TimeTrigger StartBoundary, the Principal UserId, LogonType and RunLevel - plus ClientProcessId, ParentProcessId and SubjectLogonId as separate EventData fields. The persistence remains fully reconstructable from the event after the on-disk task is deleted. This subcategory was one of the 13 added in the Logmira pass."
+    },
+    {
+      "id": "sensitive-privilege-use-volume-relative-to-process-creation",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in the Atomic Red Team validation exercise on LAB-MEMBER (member, Server 2019 build 17763.9121) and LAB-DC (DC). Evidence: the Atomic exercise records kept in the development repository.",
+      "notes": "In one 9-minute window on a near-idle member server: 4673 = 3107 events, 100% SeTcbPrivilege, from svchost.exe (3037) and lsass.exe (70); 4674 = 2455, SeTakeOwnershipPrivilege (2412) and SeSecurityPrivilege (43). Against 4688 = 669 for the same window. 8.3x the volume of process creation, and none of it contributed to any of the 11 activity reconstructions."
+    },
+    {
+      "id": "an-authorization-denied-remote-wmi-call-logs-no-failure-on-the-target",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in the Atomic Red Team validation exercise on LAB-MEMBER (member, Server 2019 build 17763.9121) and LAB-DC (DC). Evidence: the Atomic exercise records kept in the development repository.",
+      "notes": "'wmic /node:<DC> ... process call create' from an account without rights on the target returns 'Access is denied' (0x80070005) but produces NO 4625 and NO 4776 on the target. The denial happens at DCOM/WMI authorization, after authentication, and Windows does not audit it. What the DC records instead is a SUCCESSFUL 4624 type 3 NTLM as NT AUTHORITY\\ANONYMOUS LOGON - 7 of them across the exercise, all from the source IP."
+    },
+    {
+      "id": "wmic-rejects-an-unquoted-domain-backslash-user",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in the Atomic Red Team validation exercise on LAB-MEMBER (member, Server 2019 build 17763.9121) and LAB-DC (DC). Evidence: the Atomic exercise records kept in the development repository.",
+      "notes": "'wmic /user:LAB\\lab-attacker /password:X /node:\"IP\" ...' fails immediately with 'Invalid Global Switch.' and never touches the network, in either switch order. Quoting the values ('/user:\"DOMAIN\\user\" /password:\"pw\"') works. Atomic Red Team's T1047 'WMI Execute Remote Process' ships the unquoted form with a DOMAIN\\Administrator default, so that atomic is a silent no-op as written. Separately: passing the NetBIOS domain form makes Kerberos treat it as a realm (ServiceName krbtgt/<the NetBIOS name>) and fail with 4771 status 0x18 even for a VALID credential, after which the connection degrades to anonymous NTLM."
+    },
+    {
+      "id": "net-user-add-rejects-a-password-containing-the-account-name",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in the Atomic Red Team validation exercise on LAB-MEMBER (member, Server 2019 build 17763.9121) and LAB-DC (DC). Evidence: the Atomic exercise records kept in the development repository.",
+      "notes": "'net user /add \"T1136.001_CMD\" \"T1136.001_CMD!\"' fails with NET HELPMSG 2245 under default Windows password complexity, because the password contains the account name. The attempt still leaves a readable trail: 4720 (created) followed by 4724, 4729 and 4726 (deleted) within one millisecond - a create-then-delete pair that identifies a policy-rejected creation. net.exe also prompts interactively when a password is 14 characters or longer, which makes it unusable non-interactively at that length. Atomic Red Team's T1136.001 ships the failing default."
+    },
+    {
+      "id": "event-log-xpath-select-holds-at-most-23-eventid-terms",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 on LAB-MEMBER (source, Server 2019 build 17763.9121) and LAB-DC (collector). Verdict read from the source's Microsoft-Windows-Forwarding/Operational after forcing a re-subscription with a WinRM restart. Evidence: the review log kept in the development repository 'W-2'. Documented ceiling cited from https://learn.microsoft.com/en-us/windows/win32/wes/consuming-events",
+      "notes": "Microsoft documents the limit verbatim: 'If the XPath expression is a compound expression that contains more than 20 expressions or you are querying for events from multiple sources, then you must use a structured XML query.' Using a structured XML query (QueryList/Query/Select) does NOT lift the limit - it is how you stay under it, by spreading terms across several Select elements, as the sample on that page shows. Measured tolerance on this build: 23 EventID terms in one <Select> is accepted, 24 is refused. Isolated three ways: (1) it is the TERM COUNT, not the string length - a 22-term query padded to a 529-character XPath, longer than the 24-term query's 393, was accepted; (2) it is not a toxic event ID - the first 13 and the last 13 of the list each worked alone; (3) it is PER-SELECTOR, not per-subscription - all 26 IDs across two Select elements worked, as did three Selects and two Query elements on the same channel, and the subscription carries 36 terms across three channels."
+    },
+    {
+      "id": "a-wef-source-drops-an-overlong-channel-and-keeps-forwarding-the-rest",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 on LAB-MEMBER (source, Server 2019 build 17763.9121) and LAB-DC (collector). Verdict read from the source's Microsoft-Windows-Forwarding/Operational after forcing a re-subscription with a WinRM restart. Evidence: the review log kept in the development repository 'W-2'.",
+      "notes": "When one channel's Select exceeds the XPath term ceiling and OTHER channels are present, the source emits event 101 ('the subscription is created, but one or more channels in the query could not be read at this time') and then forwards the remaining channels normally while delivering NOTHING from the offending one. When the overlong channel is the only one, the subscription fails outright with event 102, error code 5004. Throughout the 101 state the collector reports RunTimeStatus Active, LastError 0 and a fresh heartbeat, and 'wecutil gr' shows the source under EventSources - so no collector-side indicator reveals the missing channel. This is why the defect survived two days of investigation: PowerShell and System events arrived by the thousand while Security delivered zero."
+    },
+    {
+      "id": "forcing-a-wef-resubscription-makes-the-source-verdict-deterministic",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 on LAB-MEMBER (source, Server 2019 build 17763.9121) and LAB-DC (collector). Verdict read from the source's Microsoft-Windows-Forwarding/Operational after forcing a re-subscription with a WinRM restart. Evidence: the review log kept in the development repository 'W-2'.",
+      "notes": "Waiting passively for a newly created subscription's verdict event is unreliable (recorded earlier as wef-source-verdict-event-is-not-reliably-emitted). Forcing the question is reliable: 'Restart-Service WinRM -Force' on the source makes EVERY subscription re-register and emit its own 100/101/102 within about half a second. One restart produced verdicts for nine subscriptions inside 400 milliseconds. This is the instrument that made a clean bisect possible; the earlier retracted bisect had used an 80-second event window instead."
+    },
+    {
+      "id": "get-winevent-providername-filter-does-not-work-on-forwardedevents",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 on LAB-MEMBER (source, Server 2019 build 17763.9121) and LAB-DC (collector). Verdict read from the source's Microsoft-Windows-Forwarding/Operational after forcing a re-subscription with a WinRM restart. Evidence: the review log kept in the development repository 'W-2'.",
+      "notes": "Get-WinEvent -FilterHashtable @{LogName='ForwardedEvents'; ProviderName=<name>} returns ZERO for every provider on that channel, including one holding 32422 events whose ProviderName property reads back correctly when the same events are pulled without the filter. Server-side provider filtering must not be used on ForwardedEvents; pull the events and filter client-side on $_.ProviderName."
+    },
+    {
+      "id": "wef-forwarder-verdict-events-carry-structured-fields",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 on LAB-MEMBER (Server 2019 build 17763.9121) against live 100/101/102 subscriptions. Evidence: the review log kept in the development repository 'W-2'.",
+      "notes": "Microsoft-Windows-Forwarding/Operational events carry the subscription name and the diagnosis in structured EventData fields, so nothing needs to be parsed out of a localised message. Measured layout: 100 EventData Name='SubscribeSuccess' with Data Id and Query; 101 'SubscribePartialSuccess' with Data Id, Query and Status; 102 'SubscribeFailure' with Data Id, Query and ErrorCode; 103 (unsubscribed) with Data Id. The 101's Status field is a <t:QueryStatus> document with one <t:Channel Name=... ErrorCode=.../> per channel in the query - the unreadable channel carries a non-zero code (Security ErrorCode=15001 for the W-2 case) while the others are 0. The 100 and 101 events also carry the FULL query the source received, which is an independent way to confirm what the collector actually sent."
+    },
+    {
+      "id": "a-wef-round-unsubscribes-everything-before-resubscribing",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 on LAB-MEMBER (Server 2019 build 17763.9121) against live 100/101/102 subscriptions. Evidence: the review log kept in the development repository 'W-2'.",
+      "notes": "On every policy refresh the forwarder emits event 103 (unsubscribed) for each subscription it currently holds, then a fresh 100/101/102 for each subscription the collector still offers. Two consequences for reading this channel: (1) a subscription whose NEWEST event is 103 is one the host no longer carries; (2) a 102 never receives a 103 - you cannot unsubscribe what was never subscribed - so a failed subscription the collector has since removed would be reported forever unless verdicts older than the channel's newest 103 are discarded. A time window is NOT a usable substitute: the SubscriptionManager value carries Refresh=60, so rounds are a minute apart, and a 120-second window was measured leaking a deleted subscription back as a finding 46 seconds later. Correlation ActivityID does not group a round either - it tracks the WinRM process instance and spans several rounds."
+    },
+    {
+      "id": "security-event-ids-can-be-checked-on-the-host-itself",
+      "status": "verified-doc",
+      "source": "https://learn.microsoft.com/en-us/windows-server/identity/ad-ds/plan/appendix-l--events-to-monitor",
+      "notes": "Two authoritative sources for a Security event ID's meaning, neither of which is memory. (1) Microsoft's table 'Appendix L - Events to Monitor' lists the current ID, the legacy ID, a potential-criticality rating and a one-line summary. Note that the per-event pages under .../windows-10/security/threat-protection/auditing/event-<id> exist for SOME ids and 404 for others (4670, 4698, 4699, 4702 resolve; 4729, 4757 do not), which is the same trap that produced the retracted 4899 claim - so a 404 there means 'check elsewhere', not 'the event does not exist'. (2) On the host: 'wevtutil gp Microsoft-Windows-Security-Auditing /ge /gm:true' prints every Security event id with its message template."
+    },
+    {
+      "id": "microsoft-wef-baseline-uses-suppress-and-per-field-filtering",
+      "status": "verified-doc",
+      "source": "https://learn.microsoft.com/en-us/windows/security/operating-system-security/device-management/use-windows-event-forwarding-to-assist-in-intrusion-detection",
+      "notes": "Microsoft's published WEF baseline is structured as 43 separate <Query> elements, each with a short <Select> - independent confirmation of the W-2 fix, since it never puts many IDs in one selector. It also uses <Suppress> and per-field predicates for noise that IronBlackBox forwards unfiltered: 5140 only when ShareName is neither \\\\*\\IPC$ nor \\\\*\\NetLogon; 4672 suppressed where the subject SID is S-1-5-18; 4624 split by LogonType, with network logons (type 3) moved out of the baseline into a separate 'Suspect' subscription. Stated WEC ceiling: '3,000 events per second on average for all configured subscriptions'. On ContentFormat: RenderedText means 'the event size is effectively doubled or tripled', and the Events (binary) format 'can more than double the event volume a single WEC server can accommodate'. Registry limits: >1000 lifetime WEF sources makes Event Viewer briefly unresponsive, >50,000 requires wecutil only, >100,000 and 'the registry won't be readable and the WEC server will likely have to be rebuilt'."
+    },
+    {
+      "id": "wef-suppress-applies-to-the-whole-query-not-one-select",
+      "status": "verified-doc",
+      "source": "https://learn.microsoft.com/en-us/windows/security/operating-system-security/device-management/use-windows-event-forwarding-to-assist-in-intrusion-detection , and measured 2026-08-28 on the lab.",
+      "notes": "Microsoft: 'suppress statements that filter out specific events, only apply within that query statement'. A <Suppress> therefore applies to EVERY <Select> in its <Query>, not just one. Consequence for a multi-ID Security query: a <Suppress> for SubjectUserSid=S-1-5-18 intended to drop SYSTEM's 4672 would also delete every 4688 (process create) whose subject is SYSTEM - measured 1227 of 3032 on the member (40%) and 565 of 1124 on the DC (50%), i.e. services and SYSTEM-run tasks. The safe pattern is an INLINE predicate appended to a single <Select> for a single event id (e.g. '*[System[(EventID=4672)]] and *[EventData[Data[@Name=\"SubjectUserSid\"] != \"S-1-5-18\"]]'), which can only ever affect that one id. Verified with Get-WinEvent -FilterXPath using the subscription's own predicate string: it selects exactly the intended side (0 SYSTEM survive the 4672 keep-filter; 0 IPC$/NetLogon survive the 5140 keep-filter) and forwarding of SYSTEM-spawned 4688 was unaffected."
+    },
+    {
+      "id": "applocker-exe-dll-channel-default-holds-two-minutes",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27/28 on LAB-MEMBER (Server 2019 17763.9121).",
+      "notes": "Microsoft-Windows-AppLocker/EXE and DLL ships at MaximumSizeInBytes 1052672. IronBlackBox's baseline ALLOW ALL EXE rule raises event 8002 ('was allowed to run') on EVERY process start, so on an idle host the channel wrote ~668 events in 9 minutes and the whole log rolls over in roughly two minutes - an 8003 LOLBin audit hit is overwritten within that window. The channel is a MODERN channel: it is NOT sized by the EventLog policy registry value that classic logs (Security/Application/System) use, so Enable-IRVisibility's sizing cannot reach it; it is sized with 'wevtutil sl <channel> /ms:<bytes>' (bytes, not kilobytes). Sizing it to 134217728 (128 MiB) and reading back was proven on the lab, with rollback to 1052672. A restored smaller maximum caps future growth without truncating existing events."
+    },
+    {
+      "id": "get-winevent-filterxpath-eventrecordid-uses-raw-gt",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-28 on LAB-MEMBER.",
+      "notes": "Get-WinEvent -FilterXPath pages by RecordId with '*[System[(EventID=N) and EventRecordID > K]]' using the RAW '>' operator. The XML-escaped form '&gt;' THROWS 'The specified query is invalid'. This is the opposite of a structured XML <QueryList> query, where '>' must be escaped. RecordId is monotonic and unique per channel, so this is the correct way to read a channel incrementally without loss: a timestamp bookmark cannot advance through events that share a second (measured: a 5-event cap over a same-second burst re-read the same five forever), whereas EventRecordID > lastMax always advances. Scan -Oldest so the cap keeps the oldest and the last element carries the highest RecordId processed."
+    },
+    {
+      "id": "cim-nativeerrorcode-distinguishes-absent-from-unreadable",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-28 on LAB-MEMBER.",
+      "notes": "Get-CimInstance failures carry a locale-independent NativeErrorCode on the Microsoft.Management.Infrastructure.CimException. 'InvalidNamespace' (HRESULT 0x8004100E) means the namespace does not exist - benign, e.g. querying root\\thisdoesnotexist, or root\\default absent on some hosts. 'InvalidClass' means the class is not registered in that namespace - benign, e.g. ActiveScriptEventConsumer does not exist in root\\cimv2. Any OTHER failure (access denied, provider fault) means the namespace/class is present but could not be READ, which a collector must not treat as 'absent'. Use $_.Exception.NativeErrorCode, not the localised message, to tell these apart."
+    },
+    {
+      "id": "event-4648-does-not-name-the-process-for-runas-style-use",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in the Atomic exercise on LAB-MEMBER.",
+      "notes": "Event 4648 (a logon was attempted using explicit credentials) does NOT reliably carry the ProcessName of the binary that used the credential. Measured: the 4 x 4648 raised for 'net use'/wmic-style explicit-credential use (Administrator -> lab-attacker -> the DC) had an EMPTY ProcessName, while 28 x 4648 raised by sshd.exe named theirs. So a 4648 alone cannot always say which binary presented the credential; correlate by SubjectLogonId with the 4688 in the same session. Not an IronBlackBox defect - a Windows auditing behaviour - but any reconstruction that leans on 4648 to attribute credential use to a process must account for it."
+    },
+    {
+      "id": "samr-user-container-enumeration-is-not-sacl-auditable-cheaply",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-27 in the Atomic exercise on LAB-DC (DC).",
+      "notes": "'net user /domain' and 'net group \"Domain Admins\" /domain' read CN=Users over SAMR (not LDAP), and CN=Users carries no SACL, so they produce 4662: 0 and 5145: 0 on the DC even with Directory Service Access auditing on and AdminSDHolder/GPO/DC-OU SACLs in place. Catching this enumeration would require a SACL on the user container, which audits every logon's user reads - prohibitive volume. Enable-AdObjectAuditing therefore SACLs the persistence-CHANGE targets (where MODIFYING an object is the signal), and WHO enumerated Domain Admins is recoverable from the enumerating host's 4688 command line, not from DC-side DS-Access auditing."
+    },
+    {
+      "id": "wmi-subscription-baseline-server2019-domain-member",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-28 on LAB-MEMBER (Server 2019 Datacenter, build 17763, lab.example domain member) during the S2-3 fix.",
+      "notes": "root\\subscription on a Server 2019 Datacenter (build 17763) domain member held EXACTLY two permanent objects - __EventFilter 'SCM Event Log Filter' and its bound consumer 'SCM Event Log Consumer' - and no other filters, consumers or bindings (root\\default was absent, benign). This corroborates Get-WmiPersistence's candidate-default pair on ONE host / ONE SKU; it is NOT a documented Microsoft default set (no learn.microsoft.com page enumerates Windows' shipped permanent subscriptions), so the pair stays 'probably default' only. Verified by add/remove: a LogFileEventConsumer with an unrecognised name and an extrinsic WHERE filter was correctly NOT escalated by the fixed script (nominal note, exit 0) while a CommandLineEventConsumer was (behavioural finding, exit 1); both were torn down and the baseline restored."
+    },
+    {
+      "id": "binding-failure-always-exits-1-and-is-not-trappable",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-28 on LAB-MEMBER (Server 2019 Datacenter, build 17763) during the P-1 fix.",
+      "notes": "Under powershell.exe -File on PS 5.1, EVERY parameter-binding failure sets host exit code 1: [ValidateRange] violated, [ValidateSet] violated, a wrong type (-Typed abc on an [int]), an unknown parameter (-Bogus), and an ambiguous parameter set (-Audit -Apply). A valid invocation exits 0. Neither a script-scope `trap` nor a `begin { trap { } }` intercepts any of them - both were tested and both still exited 1 - because binding completes before any in-script handler exists. Consequence for this toolkit: exit 1 is reserved for findings (docs/DESIGN.md section 3), so value validation must be done in the script BODY (throw -> the bottom catch -> exit 2), which is what the template's Parameter validation region does. Three classes remain uncoverable in-script: wrong type, unknown parameter, ambiguous parameter set."
+    },
+    {
+      "id": "command-wrapper-maps-binding-failure-to-exit-2",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-28 on LAB-MEMBER (Server 2019 Datacenter, build 17763) during the P-1 fix.",
+      "notes": "Invoking a script through `powershell.exe -Command \"try { & 'script.ps1' <args>; exit $LASTEXITCODE } catch { exit 2 }\"` makes a parameter-binding failure CATCHABLE by the caller, unlike -File. Measured: all five binding-failure classes ([ValidateRange], wrong type, unknown parameter, ambiguous parameter set) returned 2, and a valid invocation still returned the script's own code (0). This is the only way to close the three binding-failure classes no in-script code can reach, so it is the invocation form documented for RMM deployment in docs/DESIGN.md section 3."
+    },
+    {
+      "id": "native-launch-failure-is-terminating-even-under-eap-continue",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-28 on LAB-MEMBER (Server 2019 Datacenter, build 17763) during the L2 collector campaign.",
+      "notes": "Calling `& $path` on a file that is NOT a valid executable raises a TERMINATING error even with $ErrorActionPreference = 'Continue': \"Program 'nope.exe' failed to run: The specified executable is not a valid application for this OS platform.\" Setting EAP does not contain it, so a try/finally with no catch lets it escape to the script's bottom catch. This is distinct from a native command that RUNS and returns non-zero, which EAP='Continue' does contain. Consequence: Invoke-NativeCommand needs an explicit catch, not just EAP - defect AC-1, fixed across 19 scripts."
+    },
+    {
+      "id": "lastexitcode-throws-under-strictmode-when-never-set",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-28 on LAB-MEMBER (Server 2019 Datacenter, build 17763) during the L2 collector campaign.",
+      "notes": "With Set-StrictMode -Version 1.0, reading $LASTEXITCODE in a session where NO native command has run yet throws \"The variable '$LASTEXITCODE' cannot be retrieved because it has not been set.\" `Get-Variable -Name LASTEXITCODE -ValueOnly -ErrorAction SilentlyContinue` returns $null instead of throwing and is the safe form. It also stays unset after a native LAUNCH failure, so $null must be read as 'never ran' rather than as success."
+    },
+    {
+      "id": "adsi-dispose-throws-from-member-lookup-when-bind-failed",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-28 on LAB-MEMBER (Server 2019 Datacenter, build 17763) during the L2 collector campaign.",
+      "notes": "A System.DirectoryServices.DirectoryEntry whose bind failed is NOT null and throws nothing on construction: it comes back with an EMPTY .Path and .Properties.Count = 0, so the first .Properties['x'] read fails with PowerShell's opaque \"Cannot index into a null array\". Worse, calling .Dispose() on it in a finally block throws from MEMBER LOOKUP - 'The following exception occurred while retrieving member \"Dispose\": \"The specified domain either does not exist or could not be contacted.\"' - so `if ($null -ne $x) { $x.Dispose() }` does NOT protect the cleanup, and because the throw happens in finally it REPLACES the real error. Every ADSI Dispose must sit in its own try/catch. Defect AD-1. NOTE: measured with a LOCAL admin identity (no domain credentials), which is itself why the bind failed; what .Properties.Count reads on a SUCCESSFUL RootDSE bind remains UNVERIFIED."
+    },
+    {
+      "id": "winmgmt-restarts-on-demand-so-stopping-it-does-not-deny-wmi",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-28 on LAB-MEMBER (Server 2019 Datacenter, build 17763) during the L2 collector campaign.",
+      "notes": "`Stop-Service Winmgmt -Force` does NOT deny WMI to a subsequent client: the service auto-starts on demand, so a collector run immediately afterwards read WMI normally and the service was Running again at the end. To actually deny WMI for a negative test the service must be set to StartupType Disabled AND stopped; then clients fail with 'The service cannot be started, either because it is disabled or because it has no enabled devices associated with it.' Restore with StartupType Automatic + Start-Service and verify with a real query. Relevant to any test that claims to have denied WMI."
+    },
+    {
+      "id": "system-binds-ldap-as-computer-account-local-admin-cannot",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-28 on LAB-MEMBER (Server 2019 Datacenter 17763, domain member of lab.example).",
+      "notes": "On a domain MEMBER, an implicit LDAP bind depends entirely on the caller's identity, and network reachability is irrelevant to it. As the LOCAL account LAB-MEMBER\\Administrator over SSH the bind FAILS even with DNS resolving the domain, the DC answering ICMP and TCP 389 open: New-Object DirectoryServices.DirectoryEntry('LDAP://RootDSE') returns an object that is neither null nor throwing, with .Path = '' and .Properties.Count = 0. As NT AUTHORITY\\SYSTEM (via a one-shot scheduled task, /RU SYSTEM /RL HIGHEST) the SAME code binds: .Path = 'LDAP://RootDSE', .Properties.Count = 22, and defaultNamingContext reads back as a non-empty string - the domain DN, 'DC=' plus each label of lab.example. SYSTEM authenticates to the network as the computer account, which is a domain principal. This is also how an RMM invokes these scripts, so SYSTEM is the faithful test context, not a workaround. lab/Invoke-LabRun.sh --as-system implements it."
+    },
+    {
+      "id": "rootdse-defaultnamingcontext-reads-back-as-string",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-28 on LAB-MEMBER and LAB-DC (lab.example, functional level Server 2016).",
+      "notes": "$root.Properties['defaultNamingContext'].Value on a DirectoryEntry bound to 'LDAP://RootDSE' DOES yield the domain DN as a string ('DC=' plus each label of lab.example) - the assumption Get-AdAttackSurface carried as # UNVERIFIED since it was written, and the bind every other query in it depends on. Verified from a domain member as SYSTEM and on the DC as a domain account. A bound entry reported Properties.Count = 22 against 0 for a failed bind, so that contrast is a usable diagnostic (though 22 is one forest's number, not a documented constant)."
+    },
+    {
+      "id": "a-zero-row-ldap-answer-must-be-proven-by-seeding",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-28 against lab.example during the Get-AdAttackSurface L4 run.",
+      "notes": "Get-AdAttackSurface's kerberoast and AS-REP filters returned ZERO rows on the lab forest, which cannot distinguish a correct filter from a broken one. Proven by SEEDING instead: setting servicePrincipalName and the DONT_REQ_PREAUTH bit (0x400000) on one lab user produced 'kerberoastable: 1' and 'AS-REP roastable: 1' (18 findings total), and reverting the account to its recorded userAccountControl (66048) with no SPN returned both counters to 0 (16 findings). Method note for any future check that reports a zero: seed the condition, or the zero proves nothing. Same reasoning applied to the GPP cpassword scan, where a planted fake Groups.xml was found and then removed."
+    },
+    {
+      "id": "auditpol-backup-reflects-a-live-set",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-28 on LAB-MEMBER (Server 2019 Datacenter, build 17763) during the A-2 fix.",
+      "notes": "'auditpol /backup' DOES reflect the live effective policy, so comparing a fresh backup against a recorded one is a sound test of STATE. Measured: two backups of an unchanged policy are byte-identical; after 'auditpol /set /subcategory:{0CCE9211-...} /success:disable /failure:disable' the backup's Setting Value moved 3 -> 0 and the file differed; 'auditpol /restore' put it back and the backup matched the original again. CAUTION on method: a first measurement appeared to show /backup NOT seeing a change, but that /set was a no-op - the subcategory was already at 'Success and Failure'. Always change the value to something it does not already hold. Note also that {0CCE9211-...} is Security System Extension, not Audit Policy Change."
+    },
+    {
+      "id": "powershell-operational-holds-11-seconds-at-default-size",
+      "status": "verified-lab",
+      "source": "Measured 2026-08-31 on LAB-MEMBER (Server 2019 Datacenter 17763) during the Atomic Red Team re-run.",
+      "notes": "Microsoft-Windows-PowerShell/Operational and 'Windows PowerShell' both default to 15 MB. With ScriptBlock logging ON - which Enable-IRVisibility turns on - that is about ELEVEN SECONDS of history under the load of this toolkit's own collectors: the copy captured by Invoke-TriageCollection spanned 00:04:21.4Z to 00:04:32.0Z, while the 22 attack activities it was supposed to evidence had run from 23:34:20Z to 23:45:40Z, half an hour earlier and entirely rolled away. Security.evtx, sized to 2 GB by the same script, still held events from 21:49Z. So the act of COLLECTING evidence destroyed the PowerShell evidence. Enable-IRVisibility sized only Security, Application and System - the classic logs reachable through the EventLog policy value - and a modern channel needs 'wevtutil sl /ms:' instead (the same reason Enable-LolbinAudit sizes the AppLocker channel that way). Fixed as AT-13: -PowerShellChannelSizeBytes, default 256 MB."
+    },
+    {
+      "id": "at13-fix-remeasured-retention-11s-to-24h",
+      "status": "verified-lab",
+      "source": "Measured 2026-09-01 on LAB-MEMBER (Server 2019 Datacenter 17763), re-running the armed Atomic pass against the fixed code.",
+      "notes": "The AT-13 fix was re-measured rather than assumed. Same host, same 22 activities, same collector run. Microsoft-Windows-PowerShell/Operational inside the triage collection: BEFORE the fix, 15 MB holding 11 seconds (00:04:21.4Z to 00:04:32.0Z); AFTER, 101 MB holding 1427 minutes (00:04:43Z to 23:51:53Z) - close to a full day. The reconstruction column of docs/ATOMIC-VALIDATION.md moved from 13 of 21 to 20 of 21 as a result, because the ScriptBlock evidence for the Defender exclusion, the VSS deletion, the WinRM execution and the data staging now survives to the collection instead of rolling away before the collector reaches it. METHOD CAUTION recorded at the same time: 4104 attribution is weaker than 4688, because this harness writes each atomic command to a .ps1 before running it, so ScriptBlock logging records the text whether or not the command succeeded, and the harness's own diagnostic scripts land in the same channel - T1003.001, which did not execute, still produced five 4104 hits carrying its keyword. 4688 carries the attacker's own command line and cannot come from elsewhere."
+    },
+    {
+      "id": "lateral-movement-channels-ship-tiny",
+      "status": "verified-lab",
+      "source": "Measured 2026-09-02 on Server 2019 Datacenter 17763 with 'wevtutil gl <channel>', reading maxSize and type for each of the five.",
+      "notes": "Microsoft-Windows-TerminalServices-LocalSessionManager/Operational and Microsoft-Windows-TerminalServices-RemoteConnectionManager/Operational ship with maxSize 1052672 bytes (1 MB); Microsoft-Windows-SmbClient/Security, Microsoft-Windows-SMBServer/Security and Microsoft-Windows-SMBServer/Audit ship with 8388608 (8 MB). All five report type=Operational and enabled=true out of the box. For scale, this toolkit gives the Security log 2 GB. NOT MEASURED: the event rate of any of them, or how much history 1 MB represents on a host that is actually used over RDP or serves files - the lab is driven over SSH and shares nothing, so the five held 1, 3, 0, 0 and 0 events and the only RDP events present were listener startup (1136, 258, 20523, 32). Any sizing default is therefore justified by a circular log's ceiling being cheap, not by an observed rate."
+    },
+    {
+      "id": "isclassiclog-discriminates-classic-from-modern",
+      "status": "verified-lab",
+      "source": "Measured 2026-09-02 on Server 2019 Datacenter 17763 via 'Get-WinEvent -ListLog <channel>' and cross-checked against 'wevtutil gl' type.",
+      "notes": "Get-WinEvent -ListLog exposes IsClassicLog, which separates the logs the EventLog policy governs from the ones it does not, as a property of the channel rather than a guess from its name. True: Security, Application, System, and 'Windows PowerShell'. False: Microsoft-Windows-SmbClient/Security, Microsoft-Windows-PowerShell/Operational. The 'Windows PowerShell' result matters - it looks modern by naming convention and is classic, which is why a name-based test would be wrong."
+    },
+    {
+      "id": "eventlog-retention-policy-does-not-reach-a-modern-channel",
+      "status": "verified-lab",
+      "source": "Measured 2026-09-02 on Server 2019 Datacenter 17763: Protect-EventLogs -Apply -Channels 'Microsoft-Windows-SmbClient/Security', with 'wevtutil gl' read before and after.",
+      "notes": "Retention and AutoBackupLogFiles under HKLM:\\Software\\Policies\\Microsoft\\Windows\\EventLog\\<channel> govern CLASSIC logs only. Pointed at a modern channel the write SUCCEEDS and has no effect: the policy key was created with AutoBackupLogFiles=1 and Retention=1, the registry read them back, the script reported '2 change(s) applied' and exited 0, and 'wevtutil gl' reported retention:false both before and after. Same family as the AT-13 lesson that the policy MaxSize value cannot size a modern channel - and the same trap in the other direction: there it did nothing visible, here it reported success. Consequence: a script that writes this policy must test IsClassicLog first, and a modern channel gets capacity through 'wevtutil sl /ms:' with no archive-on-full equivalent that this project has found."
+    },
+    {
+      "id": "wevtutil-ms-did-not-round-on-one-measured-channel",
+      "status": "verified-lab-partial",
+      "source": "Measured 2026-09-02 on Server 2019 Datacenter 17763: 'wevtutil sl Microsoft-Windows-SmbClient/Security /ms:9000000' then 'wevtutil gl' on the same channel.",
+      "notes": "This repository asserts in the review log kept in the development repository and in Enable-IRVisibility's channel-sizing comment that wevtutil rounds /ms: up to a 64 KB multiple, and NO facts.json row backed that. Measured: a request for 9000000 bytes - not a multiple of 65536 - produced a channel reporting maxSize 9000000 exactly. So no rounding occurred on that channel at that value.\\n\\nDELIBERATELY MARKED PARTIAL. One value on one modern channel does not refute the general claim: rounding may apply to classic logs, to other value ranges, or to the EventLog policy path rather than to 'sl /ms:'. What this row establishes is only that the claim is NOT universally true and was never grounded. Consequence for code: a read-back that compares exactly is wrong wherever rounding does occur, and a read-back that only tests '>=' the requested size passes a channel that never changed - so the comparison has to be one-sided with a small tolerance, which is what Restore-EventChannelChange now does."
+    },
+    {
+      "id": "vss-diff-area-accepts-a-sibling-partition-not-a-vhd-on-the-protected-volume",
+      "status": "verified-lab",
+      "source": "Measured 2026-09-02 on Server 2019 Datacenter 17763, single 80 GB MBR disk: first with a 12 GB VHD attached as D:, then with a real 15 GB partition created as D: after shrinking C: online.",
+      "notes": "'vssadmin add shadowstorage /for=C: /on=D:' is REFUSED with \"The specified volume is nested too deeply to participate in the VSS operation\" when D: is a VHD whose backing file lives on C:. The same command is ACCEPTED when D: is a real partition, even on the same physical disk. So the error is about a backing file on the protected volume, not about sharing a spindle.\\n\\nConsequence for this project: a relocated shadow storage area can be exercised on a one-disk lab without attaching a second EBS volume. Shrink C: with Resize-Partition, New-Partition, Format-Volume, then add the association. That is how the second half of V-1 was finally proven - event 4688 captured 'vssadmin.exe resize shadowstorage /for=C: /on=D: /maxsize=4187467038', which is the operating system's own record of the argument construction rather than a reading of the code."
+    }
+  ],
+  "openQuestions": [
+    "Are the auditpol /backup CSV column headers English on a non-English Windows? (read by index, so this is a robustness question, not a correctness one)",
+    "Can a standard user delete another user's transcript? The transcript folder ACL question is untested.",
+    "Does any of this behave differently on a client SKU (Windows 10/11)? No client host has run it.",
+    "Does Enable-ScriptBlockInvocationLogging (-IncludeInvocationLogging) behave as expected? Never exercised.",
+    "Does MicrosoftWindowsPowerShellV2Root exist on Windows 10/11, and does removal there require a restart? Needs a client host.",
+    "What exact filename pattern does AutoBackupLogFiles use for archived .evtx? Unobserved, and required before any automatic purge can be written safely.",
+    "Does Prefetch actually record on a Windows Server with ROTATIONAL media? Never tested - no such host available, and it is what would settle whether SSD is the real gate."
+  ]
+}

@@ -1,0 +1,33 @@
+# Functions that exist under the SAME NAME in more than one script and whose
+# code deliberately differs. Enforced by tools/check.ps1 check 13.
+#
+# WHY THIS FILE EXISTS. Scripts here are standalone by design and helpers are
+# copied rather than shared (docs/DESIGN.md section 6), so the same
+# name appearing in several files is normal, and 65 of the 75 such names hold the
+# same code once comments and whitespace are set aside. The hazard is the ten that do not: a shared name makes a
+# reader - and the author of the next fix - assume the copies are the same, so a
+# defect corrected in one goes on living in the other. That is precisely how the
+# critical DACL bug survived in IronBlackBox-IR after being fixed in dev.
+#
+# The gate compares code with comments removed and whitespace normalised, so a
+# differing docstring or an alignment space is not a divergence. Anything left is
+# real, and has to be listed here WITH A REASON or the build fails.
+#
+# Adding a name here is a claim that the difference is deliberate. It is not a
+# way to silence the gate: if the answer is "the copies should be the same", the
+# fix is to make them the same.
+#
+# Format: <FunctionName> <TAB or spaces> <reason>
+
+Invoke-Main                  script-specific by definition - the mode switch, parameter validation and result wording of one script. docs/DESIGN.md section 6 names 'Main' as the region that is never shared.
+Invoke-HostCheck             script-specific by definition - the body of what one script checks and changes.
+
+Format-ByteCount             deliberate, and the code says so at the definition: Enable-IRVisibility's copy adds a KB tier and a sign because it prints per-volume growth that can be under a megabyte and a projected free space that goes negative exactly when the guard refuses. 524800 bytes reads as '512.5 KB' there and '524800 bytes' in Enable-VssPreservation.
+
+Get-ServiceState             each copy reads the services its own script owns, and reports the fields that script records in the manifest.
+Get-ChannelConfiguration     each copy reads the channels its own script owns; the two scripts record different fields for an 'eventchannel' change.
+Get-EventChannelState        as above, and the two differ in how much of the channel they have to read back to verify their own writes.
+Get-WinRmListenerState       Enable-WefClient and Enable-WefCollector look at the two opposite ends of the same subscription, so what counts as a healthy listener differs.
+Set-TrackedEventChannel      the two scripts size different channels under different free-space rules; Enable-IRVisibility's copy accumulates authorised growth per volume across five channels, which the other has no need of.
+Restore-EventChannel         a restorer, and each copy constrains its target with the channel set ITS OWN script owns - the constraint may never come from the manifest record. Unifying them would mean one function trusting a union of owned sets, which is the defect the constraint exists to prevent.
+Restore-EventChannelChange   as above.
