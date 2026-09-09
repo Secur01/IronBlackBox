@@ -1,0 +1,248 @@
+# CI is a safety net, not the proof. It catches syntax regressions and
+# obvious PS7-only syntax before a PR merges. The proof that a script
+# actually behaves correctly on Windows is the EC2 lab run recorded, per
+# script, in docs/VALIDATION.md (L2 -Audit read-only diff, L3 -Apply /
+# -Rollback idempotence, L4 on the script's real target class). A green
+# CI run is not equivalent to a VALIDATION.md row and must never be cited
+# as one.
+
+name: CI
+
+# Neither job writes anything back, and the default GITHUB_TOKEN scope is wider
+# than read. This repository asks for an Authenticode check on a downloaded
+# Sysmon binary; the same standard applies to its own pipeline.
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    name: lint (static gate)
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a commit, not to the mutable v4 tag: a tag is whatever its
+      # owner last moved it to, and this action runs with a token in the job.
+      # 11d5960 is what refs/tags/v4 resolved to on 2026-09-02 (tag v4.4.0).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          # -RequiredVersion, because tools/check.ps1 IMPORTS and executes this
+          # module: without a pin, the repository marked Trusted on the line
+          # above decides what code runs in the job. 1.25.0 is the version
+          # PSGallery reported as IsLatestVersion on 2026-09-02.
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name PSScriptAnalyzer -RequiredVersion 1.25.0 -Force -Scope CurrentUser
+
+      - name: Run tools/check.ps1
+        shell: pwsh
+        run: pwsh ./tools/check.ps1 -RequireAnalyzer
+
+  smoke:
+    # Named after the runner label this job pins, not after an OS: the label is
+    # the only thing the workflow controls, and the header above already says a
+    # green run is not a docs/VALIDATION.md row. "read-only" rather than
+    # "-Audit" because one script has no -Audit switch - see the step below.
+    name: smoke (windows-2022 runner, read-only run)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Run every implemented script in its read-only mode
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          $scriptDirs = @('logging-hardening', 'anti-tampering', 'ir-collection')
+          $scripts = @()
+          foreach ($dir in $scriptDirs) {
+            if (Test-Path -LiteralPath $dir) {
+              $scripts += Get-ChildItem -LiteralPath $dir -Filter '*.ps1' -Recurse -File -ErrorAction SilentlyContinue
+            }
+          }
+
+          if ($scripts.Count -eq 0) {
+            Write-Host "No scripts found under logging-hardening/, anti-tampering/, ir-collection/ yet. Nothing to smoke-test - passing." -ForegroundColor Yellow
+            exit 0
+          }
+
+          $overallFail = $false
+
+          foreach ($script in $scripts) {
+            Write-Host "== $($script.FullName) ==" -ForegroundColor Cyan
+
+            # Ask each script what it declares instead of assuming all of them
+            # take -Audit. Test-VisibilityDrift is read-only by construction
+            # and its param block holds only -ToolkitRoot and -Detailed, and on
+            # PS 5.1 an unknown parameter is a BINDING failure that exits 1
+            # (verification/facts.json,
+            # binding-failure-always-exits-1-and-is-not-trappable) - the same
+            # value the accept-list below reads as "findings". So passing
+            # -Audit blindly scored that script PASS with not one line of it
+            # executed. ParseFile only parses; it never runs the script. Parse
+            # errors are the lint job's business, so they are not captured here
+            # - a script that fails to parse loses its param block and trips
+            # the -ToolkitRoot guard below.
+            $scriptAst = [System.Management.Automation.Language.Parser]::ParseFile(
+                $script.FullName, [ref] $null, [ref] $null)
+            $declared = @()
+            if ($scriptAst.ParamBlock) {
+              $declared = @($scriptAst.ParamBlock.Parameters |
+                  ForEach-Object { $_.Name.VariablePath.UserPath })
+            }
+
+            # ISOLATE BY THE PARAMETER THE SCRIPT DECLARES, not by a name
+            # assumed for all of them. This used to demand -ToolkitRoot and fail
+            # anything without it, on the stated grounds that the run "would fall
+            # back to the real C:\ProgramData default". That is true of every
+            # script in logging-hardening/ and anti-tampering/, which all default
+            # -ToolkitRoot to C:\ProgramData\IronBlackBox. It is FALSE of
+            # ir-collection/Get-AdAttackSurface: it takes -OutputPath with no
+            # default at all and prints "no -OutputPath given; nothing was written
+            # to disk", so the one script the rule rejected is the one that could
+            # not have written anywhere.
+            #
+            # A collector also takes -OutputPath in addition to -ToolkitRoot, so
+            # both get an isolated path: passing it exercises the write path
+            # instead of skipping it, and keeps what it writes inside the tree the
+            # tripwire watches.
+            $writeParams = @($declared | Where-Object { $_ -in @('ToolkitRoot', 'OutputPath') })
+            if ($writeParams.Count -eq 0) {
+              Write-Host "  [FAIL] declares neither -ToolkitRoot nor -OutputPath - not run, since nothing would confine what it writes" -ForegroundColor Red
+              $overallFail = $true
+              continue
+            }
+
+            # Isolated per script, under the runner's own temp workspace, never
+            # a real system path. -OutputPath goes to a subdirectory of the same
+            # root so one exclusion covers both below.
+            $toolkitRoot = Join-Path $env:RUNNER_TEMP ("ibb-" + $script.BaseName)
+            New-Item -ItemType Directory -Path $toolkitRoot -Force | Out-Null
+            $outputPath = Join-Path $toolkitRoot 'output'
+
+            # Output goes to a file so the exit-2 test below can read it, and the
+            # file lives in its own directory that the tripwire also excludes -
+            # a log written INSIDE the watched tree reads as the script writing
+            # outside its root, which is how this was first written and what the
+            # lab run reported.
+            $logDir = Join-Path $env:RUNNER_TEMP 'ibb-logs'
+            New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+            $logPath = Join-Path $logDir ($script.BaseName + '.log')
+
+            # Several scripts scratch a file for 'auditpol /backup' during a
+            # read-only run, on purpose, and take the directory from
+            # [System.IO.Path]::GetTempPath() or $env:TEMP - which is NOT
+            # $env:RUNNER_TEMP, so the tripwire below was watching a directory
+            # they never write to (Enable-IRVisibility, Enable-AdObjectAuditing,
+            # Deploy-TamperAlerts, Test-VisibilityDrift). Give the
+            # child its own temp INSIDE the watched tree: for a non-system
+            # process GetTempPath resolves TMP, then TEMP, then USERPROFILE,
+            # then the Windows directory
+            # (https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-gettemppath2w).
+            # A private directory per script also means anything appearing in
+            # it came from this child and not from something else sharing the
+            # runner's user temp.
+            $scriptTemp = Join-Path $env:RUNNER_TEMP ("ibb-temp-" + $script.BaseName)
+            New-Item -ItemType Directory -Path $scriptTemp -Force | Out-Null
+            $env:TMP = $scriptTemp
+            $env:TEMP = $scriptTemp
+
+            # Snapshot the runner temp dir before the run, so anything the
+            # script writes outside its own -ToolkitRoot is detectable.
+            # This cannot see registry/service/other machine-wide changes -
+            # it is a filesystem-only tripwire, not a full sandbox.
+            $before = Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Recurse -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notlike "$toolkitRoot*" -and
+                               $_.FullName -notlike "$outputPath*" -and
+                               $_.FullName -notlike "$logDir*" } |
+                Select-Object -ExpandProperty FullName
+
+            # AN ARRAY, NOT A SPLATTED HASHTABLE. The argument set is no longer
+            # one of two fixed shapes - -Audit is on the hardening scripts and no
+            # collector, -ToolkitRoot on all but one script, -OutputPath only on
+            # collectors - but splatting a hashtable at an EXTERNAL command turns
+            # every entry into '-Key Value', so a [switch] arrived as
+            # '-Audit True' and powershell.exe -File rejected it with "Cannot
+            # process argument transformation on parameter 'Audit'". That broke
+            # all seventeen hardening scripts, and it was caught by running this
+            # job's logic on the lab rather than by reading it. A switch has to be
+            # appended as a bare token.
+            #
+            # Every value still comes from the script's own param block, which is
+            # what makes the exit-code test below honest: a binding failure exits
+            # 1 and would otherwise land in the PASS branch.
+            $runArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $script.FullName)
+            if ($declared -contains 'Audit')       { $runArgs += '-Audit' }
+            if ($declared -contains 'ToolkitRoot') { $runArgs += @('-ToolkitRoot', $toolkitRoot) }
+            if ($declared -contains 'OutputPath')  { $runArgs += @('-OutputPath', $outputPath) }
+            Write-Host ("  args:" + (($runArgs | Select-Object -Skip 5) -join ' '))
+
+            # $ErrorActionPreference DROPPED TO Continue AROUND THE CHILD, and
+            # restored after. Under 'Stop' a native command writing ANY line to
+            # stderr becomes a terminating error in THIS script, so a script that
+            # merely printed a warning killed the whole job before its exit code
+            # was ever examined - which is what the negative test below produced:
+            # a NativeCommandError from this line instead of the verdict. The
+            # redirection does not prevent it.
+            #
+            # This is the exact trap docs/AUTHORING.md's "Native commands" section
+            # exists for, and Invoke-NativeCommand is the toolkit's own answer to
+            # it. Its own pipeline had the bug that helper prevents.
+            $previousEap = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
+            try {
+              & powershell.exe @runArgs *> $logPath
+              $exitCode = $LASTEXITCODE
+            }
+            finally {
+              $ErrorActionPreference = $previousEap
+            }
+            $runOutput = @(Get-Content -LiteralPath $logPath -ErrorAction SilentlyContinue)
+            $runOutput | ForEach-Object { Write-Host ("    " + $_) }
+
+            # 0 and 1 are both correct for a read-only run (nothing to do /
+            # findings). 2 is correct TOO, but only as a clean refusal: a runner
+            # is not domain-joined, so ir-collection/Get-AdAttackSurface cannot
+            # bind to a directory and says so and exits 2 - which is the
+            # documented meaning of 2 and the behaviour worth verifying, not a
+            # regression. What must never pass is 2 arriving with a raw .NET
+            # exception trace, which is an unhandled failure wearing the same exit
+            # code. That discriminator is the one docs/VALIDATION.md's
+            # negative-path pass established, reused here.
+            $rawException = @($runOutput | Where-Object {
+                $_ -match 'CategoryInfo|FullyQualifiedErrorId|Unhandled Exception' })
+            if ($exitCode -eq 0 -or $exitCode -eq 1) {
+              Write-Host "  [PASS] exit code $exitCode" -ForegroundColor Green
+            }
+            elseif ($exitCode -eq 2 -and $rawException.Count -eq 0) {
+              Write-Host "  [PASS] exit code 2, refused cleanly with no exception trace" -ForegroundColor Green
+            }
+            else {
+              Write-Host "  [FAIL] exit code $exitCode with $($rawException.Count) raw exception line(s)" -ForegroundColor Red
+              $overallFail = $true
+            }
+
+            $after = Get-ChildItem -LiteralPath $env:RUNNER_TEMP -Recurse -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.FullName -notlike "$toolkitRoot*" -and
+                               $_.FullName -notlike "$outputPath*" -and
+                               $_.FullName -notlike "$logDir*" } |
+                Select-Object -ExpandProperty FullName
+            $newItems = Compare-Object -ReferenceObject $before -DifferenceObject $after -PassThru |
+                Where-Object { $after -contains $_ }
+
+            if ($newItems) {
+              Write-Host "  [FAIL] wrote outside its isolated root:" -ForegroundColor Red
+              $newItems | ForEach-Object { Write-Host "    $_" -ForegroundColor Red }
+              $overallFail = $true
+            } else {
+              Write-Host "  [PASS] nothing written outside its isolated root" -ForegroundColor Green
+            }
+          }
+
+          if ($overallFail) { exit 1 } else { exit 0 }
