@@ -93,13 +93,18 @@ host, decides, and records its own changes. Four orderings still matter, and
 
 ## What the lab could not prove
 
-- **Client SKU behaviour, now partly proven.** Windows 11 Pro build 26200 was
-  measured on 2026-09-09: eight scripts completed a full contract cycle there,
-  five applied nothing, and two declined by design. It found three defects,
-  including `Remove-PowerShellV2` reporting a PSv2 bypass that does not exist on
-  that build and `Enable-VssPreservation` exiting 2 because a client SKU cannot
-  create a shadow storage association at all. See `docs/VALIDATION.md`. Older
-  Windows 10 and 11 builds remain unmeasured, and an MSP fleet holds several.
+- **Client SKU behaviour, now measured twice.** Windows 11 Pro build 26200 was
+  measured on 2026-09-09 as a workgroup client and on 2026-09-10 as a domain
+  member — the per-script outcome for each is in `docs/VALIDATION.md` and is
+  deliberately not restated here, because a copied count is how this file came
+  to disagree with it. Between them the two passes found four defects, including
+  `Remove-PowerShellV2` reporting a PSv2 bypass that does not exist on that
+  build and `Enable-VssPreservation` exiting 2 for a capability a client SKU does
+  not have. Four *effects* were observed rather than only the writes — 4104, a
+  transcript, a 4688 carrying the command line, and an 8003 per LOLBin — and
+  Windows Event Forwarding from a client is proven end to end, 221 events on the
+  collector. Older Windows 10 and 11 builds remain unmeasured, and an MSP fleet
+  holds several.
 - **Prefetch on fast media.** `Enable-ServerPrefetch` writes the setting
   correctly and the host removes it again minutes later on an NVMe system
   volume. The mechanics are proven; the outcome is not. Its row explains what

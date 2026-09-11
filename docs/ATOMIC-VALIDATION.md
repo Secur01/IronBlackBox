@@ -11,8 +11,8 @@ verdict instead of being counted as a detection failure.
 
 **This is the second exercise, run on 2026-08-31.** The first ran on 2026-08-27
 against 11 atomics and produced the AT-1…AT-12 findings that shaped the toolkit;
-its plan and per-technique telemetry verdicts are kept at
-the Atomic exercise records kept in the development repository and the Atomic exercise records kept in the development repository. This one
+its plan and per-technique telemetry verdicts are kept in
+the Atomic exercise records kept in the development repository. This one
 re-ran after every one of those findings was fixed, on a wider technique set, and
 adds the comparison the first could not make: the same host, unarmed.
 

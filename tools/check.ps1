@@ -115,10 +115,14 @@ foreach ($name in $script:FamilyName) {
     }
 }
 
+# Named once and used twice - here for the default argument, and below for the
+# cross-script gates' full-repository list. Two copies of this literal are two
+# lists that will eventually disagree about what the repository contains.
+$script:ExtraFiles = @(
+    (Join-Path (Join-Path $repoRoot 'docs') 'SCRIPT-TEMPLATE.ps1')
+)
 if (-not $Path -or $Path.Count -eq 0) {
-    $Path = @($script:FamilyDirs) + @(
-        (Join-Path (Join-Path $repoRoot 'docs') 'SCRIPT-TEMPLATE.ps1')
-    )
+    $Path = @($script:FamilyDirs) + @($script:ExtraFiles)
 }
 
 function Write-Section($Text) { Write-Host "== $Text ==" -ForegroundColor Cyan }
@@ -245,6 +249,29 @@ foreach ($p in $Path) {
         $files.Add($item.FullName)
     }
 }
+
+# THE CROSS-SCRIPT GATES NEED THE WHOLE REPOSITORY, NOT THE ARGUMENT.
+#
+# Three gates below ask "do the copies of this agree?" - manifest field names,
+# shared regions, and same-named functions. Given one file they compare it
+# against nothing, and the divergence gate then reports every allow-list entry
+# as "no script defines" or "its copies now AGREE". Measured 2026-09-10:
+# `tools/check.ps1 logging-hardening/Enable-WefCollector.ps1` printed FOUR
+# failures that do not exist, and that single-file form is exactly what
+# docs/AUTHORING.md step 2 tells an author to run. A gate that cries wolf on the
+# documented workflow gets ignored, so those three read $allFiles while every
+# per-file gate keeps reading $files.
+$allFiles = New-Object System.Collections.Generic.List[string]
+foreach ($p in (@($script:FamilyDirs) + @($script:ExtraFiles))) {
+    if (Test-Path -LiteralPath $p -PathType Container) {
+        Get-ChildItem -LiteralPath $p -Filter '*.ps1' -Recurse -File |
+            ForEach-Object { $allFiles.Add($_.FullName) }
+    }
+    elseif (Test-Path -LiteralPath $p -PathType Leaf) {
+        $allFiles.Add((Get-Item -LiteralPath $p).FullName)
+    }
+}
+
 
 if ($files.Count -eq 0) {
     Write-Host "No .ps1 files found under the given path(s). Nothing to check." -ForegroundColor Yellow
@@ -554,7 +581,7 @@ $unreadableWrites = New-Object System.Collections.ArrayList
 # reads to verify the full intended audit set. Two scripts write those, and
 # nothing was comparing their field names: exactly the defect this gate exists
 # for, in the record type it could not see.
-foreach ($file in $files) {
+foreach ($file in $allFiles) {
     $manifestTokens = $null
     $manifestErrors = $null
     $manifestAst = [System.Management.Automation.Language.Parser]::ParseFile($file, [ref] $manifestTokens, [ref] $manifestErrors)
@@ -1041,7 +1068,7 @@ Write-Section 'Script-shared regions, across scripts'
 # between SOME scripts safe: name it the same in each, and the build fails the
 # moment the copies differ.
 $sharedRegionBodies = @{}
-foreach ($file in $files) {
+foreach ($file in $allFiles) {
     if ([System.IO.Path]::GetFileName($file) -eq 'SCRIPT-TEMPLATE.ps1') { continue }
     $regions = $null
     try { $regions = Get-Regions -FilePath $file }
@@ -1284,7 +1311,7 @@ function Get-FunctionCodeOnly {
 }
 
 $functionsByName = @{}
-foreach ($file in $files) {
+foreach ($file in $allFiles) {
     if ([System.IO.Path]::GetFileName($file) -eq 'SCRIPT-TEMPLATE.ps1') { continue }
     $fnTokens = $null
     $fnErrors = $null

@@ -44,6 +44,12 @@ false — a PowerShell 2.0 bypass that does not exist on current builds, and a
 have. Both are fixed in v1.0.1; [CHANGELOG.md](CHANGELOG.md) says what to
 disregard.
 
+**Running `Enable-WefCollector` on a schedule?** v1.1.0 makes it report a
+collector that has stopped collecting. Under v1.0.1 it read the newest forwarded
+event's timestamp, printed it, and still said `[ ok ] No findings` on a collector
+that had received nothing for ten days. If it starts reporting findings after you
+update, they are true — [CHANGELOG.md](CHANGELOG.md) says what each one means.
+
 **All 20 scripts carry a dated row in
 [docs/VALIDATION.md](docs/VALIDATION.md)**, the only file in this repository
 allowed to say where a script has run. **Six reached L4**, exercised against the
@@ -77,10 +83,12 @@ only file allowed to claim a script ran somewhere. **A script with no row there
 has never run anywhere.**
 
 **What this does not cover.** The attack exercise above was run on one Windows
-version, one domain, one OS build. **One client SKU has since been measured** —
-Windows 11 Pro build 26200, where nine scripts hold a full apply-and-rollback
-cycle and two defects were found and fixed in v1.0.1 — but older Windows 10 and
-11 builds are unmeasured, and an MSP fleet holds several. It says nothing about
+version, one domain, one OS build. **One client SKU has since been measured, in
+both workgroup and domain-joined form** — Windows 11 Pro build 26200, where nine
+scripts hold a full apply-and-rollback cycle in each, three defects were found
+and fixed, and Windows Event Forwarding from a client is now proven end to end.
+But older Windows 10 and 11 builds are unmeasured, and an MSP fleet holds
+several. It says nothing about
 non-English Windows, no EDR was present, and this toolkit records rather than
 blocks — nothing here claims an attack was stopped. Read a script before you run it as SYSTEM on a machine you care about;
 they are standalone and written to be read.

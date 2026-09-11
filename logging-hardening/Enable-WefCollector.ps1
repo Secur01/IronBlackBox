@@ -93,6 +93,22 @@
     bytes for 'wevtutil sl /ms:'. Default 2048 (2 GB). A channel already larger
     than this is left alone - this script never shrinks an event log.
 
+.PARAMETER AllowClientSku
+    Run on a Windows client SKU. Without it, this script declines on a
+    workstation at exit 0 and changes nothing, because a collector is a role you
+    assign to one host and a workstation is not it. Measured on Windows 11: the
+    -Apply used to start Wecsvc and resize ForwardedEvents before finding out it
+    could not activate the subscription. Pass this only if a workstation really
+    is your collector.
+
+.PARAMETER MaxForwardedEventAgeHours
+    How stale the newest event in ForwardedEvents may be before this script
+    reports it. Default 48 hours; 0 turns the check off. It only applies when
+    the channel already holds events - an empty channel has its own finding -
+    so it reads "this collector used to work and has stopped", which is the
+    case that otherwise passes silently. A collector whose sources are all
+    legitimately offline reads the same way, and the finding says so.
+
 .PARAMETER MinimumFreeDiskPercent
     Free-space floor, as a percentage of the volume holding the ForwardedEvents
     log, below which this script will NOT raise the channel cap. Default 10.
@@ -161,7 +177,7 @@
 .NOTES
     Author  : Secur01
     Project : IronBlackBox - https://github.com/Secur01/IronBlackBox
-    Version : 1.0.1
+    Version : 1.1.0
     License : MIT
 
     Windows PowerShell 5.1. No module dependencies. Requires local
@@ -206,6 +222,15 @@ param(
     [Parameter()]
     [int] $MinimumFreeDiskPercent = 10,
 
+    # How long ForwardedEvents may go without a new event before this script
+    # says so. A collector with live sources writes continuously - the baseline
+    # subscription asks for 4624 and 4688 - so a channel that has not been
+    # written to in days is a collector that has stopped collecting, and the
+    # measured failure mode is that it looks identical to a healthy one.
+    # 0 disables the check for a fleet where a quiet collector is normal.
+    [Parameter()]
+    [int] $MaxForwardedEventAgeHours = 48,
+
     [Parameter()]
     [int] $DeliveryMaxItems = 20,
 
@@ -217,6 +242,17 @@ param(
 
     [Parameter()]
     [string] $ContentFormat = 'RenderedText',
+
+    # A WEF collector is a role you assign, not a property a host has, so this
+    # script cannot detect "not the collector" the way the two domain-controller
+    # scripts detect "not a DC". A CLIENT SKU is the one case it can: measured on
+    # Windows 11, an -Apply there set Wecsvc to Running/Automatic and sized
+    # ForwardedEvents to 2 GB and THEN discovered it could not activate the
+    # subscription, exiting 2 - a host modified for a role it will never hold.
+    # Client SKUs now decline by default; this switch is the deliberate opt-in
+    # for the unusual topology that really does collect on a workstation.
+    [Parameter()]
+    [switch] $AllowClientSku,
 
     [Parameter()]
     [switch] $ReadExistingEvents,
@@ -244,7 +280,7 @@ Set-StrictMode -Version 1.0
 $script:SuppliedParameter = $PSBoundParameters
 
 $script:ScriptName    = 'Enable-WefCollector'
-$script:ScriptVersion = '1.0.1'
+$script:ScriptVersion = '1.1.0'
 
 # Populated by Initialize-ToolkitRoot / Start-ManifestRun.
 $script:ManifestPath = $null
@@ -2389,6 +2425,7 @@ function Invoke-SubscriptionManagerEndpointCheck {
     if ($res.Readable -and $res.Present) {
         Write-Ok ('a SUBSCRIPTIONMANAGER URL is reserved on port ' + $portText +
                   ', so a source-initiated forwarder has something to talk to')
+        Test-WsmanUrlAcl -Port $portText
         return 0
     }
     if (-not $res.Readable) { return 0 }
@@ -2692,6 +2729,121 @@ function Get-ChannelConfiguration {
         }
     }
     finally { $config.Dispose() }
+}
+
+function Test-CollectorSuitableSku {
+    <#
+        Is this host a plausible WEF collector at all?
+
+        DECIDED BY ProductType, the same documented integer Enable-VssPreservation
+        uses for the same reason: 1 workstation, 2 domain controller, 3 server.
+        Not by parsing localised text, which this repository has been caught on
+        twice.
+        https://learn.microsoft.com/en-us/windows/win32/cimwin32prov/win32-operatingsystem
+
+        Returns $true when the host may proceed. ON ANY DOUBT IT RETURNS $true,
+        the same direction as the VSS precedent: a wrong $false would decline on
+        a real server collector and leave a fleet unforwarded, which is worse
+        than a wrong $true that only reproduces the old behaviour.
+    #>
+    $productType = 0
+    try { $productType = [int] (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).ProductType }
+    catch {
+        Write-Info ('the host product type could not be read (' + $_.Exception.Message +
+                    '), so this host is treated as a possible collector rather than declined')
+        return $true
+    }
+    if ($productType -eq 1) { return $false }
+    return $true
+}
+
+function Test-WsmanUrlAcl {
+    <#
+        THE RESERVATION EXISTING IS NOT THE SAME AS WECSVC BEING ALLOWED TO USE
+        IT, and the difference cost a full afternoon on 2026-09-10.
+
+        Measured on the lab collector: the `.../SUBSCRIPTIONMANAGER/WEC/`
+        reservation was present, Wecsvc and WinRM shared one PID so W-1's own
+        precondition was absent, this check said `[ ok ]`, `wecutil gr` said
+        `Active / LastError: 0` - and every source got `EventDelivery failed,
+        error code 2150859027` with ZERO events arriving. The URL ACL on
+        `http://+:5985/wsman/` granted only `NT SERVICE\WinRM`. Adding
+        `NT SERVICE\Wecsvc` to it made delivery succeed on the next cycle and
+        221 events reached the collector from a Windows 11 client.
+
+        Microsoft documents the ACL and its resolution in KB4494462, and
+        attributes the failure to WinRM and WecSvc running in SEPARATE svchost
+        processes. On this collector they shared one, so WHY the grant was
+        needed here is not established - only that it was, measured in both
+        directions. That is why this reports and does not diagnose.
+
+        REPORTS ONLY. netsh http add urlacl rewrites a machine-wide HTTP
+        reservation that WinRM itself listens on, and docs/AUTHORING.md forbids this
+        toolkit from touching RMM connectivity. The finding carries the exact
+        commands so an operator can run them deliberately.
+
+        https://learn.microsoft.com/en-us/troubleshoot/windows-server/admin-development/events-not-forwarded-by-windows-server-collector
+    #>
+    param([Parameter(Mandatory = $true)][string] $Port)
+
+    # Well-known service SIDs, from the KB above. Matched on the SID text
+    # because the SDDL prints SIDs, not names, and a name would be localised.
+    $winrmSid = 'S-1-5-80-569256582-2953403351-2909559716-1301513147-412116970'
+    $wecSid   = 'S-1-5-80-4059739203-877974739-1245631912-527174227-2996563517'
+
+    $result = Invoke-NativeCommand -FilePath $script:NetshPath `
+                                   -Arguments @('http', 'show', 'urlacl')
+    # ExitCode, not a Succeeded property: Invoke-NativeCommand returns ExitCode
+    # and Output and nothing else. Reading a property it does not have yields
+    # $null under Set-StrictMode 1.0 without throwing, so an invented
+    # `-not $result.Succeeded` test is TRUE on every run - which is exactly what
+    # the first version of this function did, and the mutation test caught it by
+    # reporting the same finding in all three states.
+    if ($result.ExitCode -ne 0) {
+        Write-Finding ('netsh http show urlacl exited ' + [string] $result.ExitCode +
+                       ', so it is unknown whether ' + $script:CollectorServiceName +
+                       ' may use the reserved wsman URL')
+        return
+    }
+
+    # One reservation per blank-line-separated block. Only the wsman roots
+    # matter; the SubscriptionManager sub-path inherits from them.
+    $blocks = ($result.Output -join "`n") -split "`n\s*`n"
+    $checked = 0
+    foreach ($block in $blocks) {
+        if ($block -notmatch '(?i):(5985|5986)/wsman/\s*$' -and $block -notmatch '(?i):(5985|5986)/wsman/[^/]') {
+            if ($block -notmatch '(?i):(5985|5986)/wsman/') { continue }
+        }
+        # Skip the deeper sub-paths: they are created per subscription and the
+        # question is about the root the listener owns.
+        if ($block -match '(?i)/wsman/[a-z]') { continue }
+        $checked++
+        $urlText = 'the wsman URL'
+        $m = [regex]::Match($block, '(?i)(https?://\S*:(?:5985|5986)/wsman/)')
+        if ($m.Success) { $urlText = $m.Groups[1].Value }
+        $hasWec = $block -match [regex]::Escape($wecSid)
+        $hasWinRm = $block -match [regex]::Escape($winrmSid)
+        if ($hasWec) {
+            Write-Ok ($urlText + ' grants ' + $script:CollectorServiceName +
+                      ', so the collector may answer a forwarder on it')
+        }
+        else {
+            Write-Finding ($urlText + ' does NOT grant ' + $script:CollectorServiceName +
+                           ' (WinRM granted: ' + [string] $hasWinRm + '). A source can enumerate the ' +
+                           'subscription and then fail EVERY delivery with WS-Man 2150859027 while ' +
+                           'this collector reports Active and LastError 0 - measured on the lab, with ' +
+                           'zero events arriving. This script will NOT change a machine-wide HTTP ' +
+                           'reservation that WinRM listens on; run these two deliberately, then ' +
+                           'restart ' + $script:CollectorServiceName + ':' + "`n" +
+                           '      netsh http delete urlacl url=' + $urlText + "`n" +
+                           '      netsh http add urlacl url=' + $urlText + ' sddl=D:(A;;GX;;;' +
+                           $winrmSid + ')(A;;GX;;;' + $wecSid + ')')
+        }
+    }
+    if ($checked -eq 0) {
+        Write-Finding ('no wsman URL reservation was found in netsh http show urlacl, so it is unknown ' +
+                       'whether ' + $script:CollectorServiceName + ' may answer a forwarder')
+    }
 }
 
 function Get-ChannelRuntime {
@@ -3471,6 +3623,70 @@ function Invoke-SubscriptionCheck {
                            'be read, so this run cannot demonstrate that anything has been collected. ' +
                            'A disabled channel reads this way; check the capacity section above.')
         }
+
+        # THE CHANNEL IS FULL. Measured 2026-09-10 on the lab collector: the
+        # .evtx was 4096 bytes OVER its own MaximumSizeInBytes in Circular mode,
+        # its newest event was ten days old, and nothing reported it. The
+        # capacity section above compares the CONFIGURED cap against the target
+        # and is right to pass - a floor check cannot fail on a full channel -
+        # so the file-versus-its-own-ceiling question has to be asked here,
+        # where the runtime size is already in hand.
+        #
+        # A finding, not a host limit: -Apply with -ForwardedEventsSizeMb raises
+        # the cap, so a lever exists.
+        if ($channel.MaxSizeBytes -gt 0 -and $runtime.FileSizeBytes -ge $channel.MaxSizeBytes) {
+            Write-Finding ($script:ForwardedEventsChannel + ' is AT OR OVER its own ceiling: the file ' +
+                           'holds ' + [string] $runtime.FileSizeBytes + ' bytes against a maximum of ' +
+                           [string] $channel.MaxSizeBytes + ' (' + $channel.LogMode + ' mode). Raise it ' +
+                           'with -ForwardedEventsSizeMb, or archive and clear the channel. A collector ' +
+                           'in this state can stop accepting events while every other check here passes.')
+        }
+
+        # THE CHANNEL HAS GONE QUIET. The last-write timestamp was already read
+        # and printed above for a human to notice; printing a value is not
+        # checking it, which is the defect fixed in Deploy-TamperAlerts on
+        # 2026-09-08 and the reason this run of the same shape is a finding.
+        # Measured 2026-09-10: -Audit printed "last write 2026-08-30" and then
+        # "No findings: this host is collecting forwarded events" at exit 0.
+        #
+        # Gated on RecordCount -gt 0 deliberately. An empty channel and an
+        # unreadable one each have their own finding above, and adding a second
+        # one for the same host state is how a monitor learns to ignore this
+        # script.
+        if ($MaxForwardedEventAgeHours -gt 0 -and $runtime.RecordCount -gt 0) {
+            $written = [datetime]::MinValue
+            $parsed = [datetime]::TryParseExact(
+                $runtime.LastWriteUtc, 'yyyy-MM-ddTHH:mm:ssZ',
+                [System.Globalization.CultureInfo]::InvariantCulture,
+                ([System.Globalization.DateTimeStyles]::AssumeUniversal -bor
+                 [System.Globalization.DateTimeStyles]::AdjustToUniversal),
+                [ref] $written)
+            if (-not $parsed) {
+                Write-Finding ($script:ForwardedEventsChannel + ' holds ' + [string] $runtime.RecordCount +
+                               ' event(s) but its last-write time could not be read, so this run cannot ' +
+                               'say whether the collector is still receiving anything.')
+            }
+            else {
+                $ageHours = ([datetime]::UtcNow - $written).TotalHours
+                if ($ageHours -gt [double] $MaxForwardedEventAgeHours) {
+                    Write-Finding ($script:ForwardedEventsChannel + ' has not been written to for ' +
+                                   [string] [int] $ageHours + ' hour(s) - newest event ' +
+                                   $runtime.LastWriteUtc + ', threshold ' +
+                                   [string] $MaxForwardedEventAgeHours + '. It holds ' +
+                                   [string] $runtime.RecordCount + ' event(s), so this collector has ' +
+                                   'collected before and has stopped. Read the source list below: a ' +
+                                   'source stuck at RunTimeStatus Inactive, or absent from it, is where ' +
+                                   'to look. If the endpoint section above reported W-1, that is the ' +
+                                   'usual cause; if it passed, the sources are. If every source is ' +
+                                   'legitimately offline, raise -MaxForwardedEventAgeHours.')
+                }
+                else {
+                    Write-Ok ($script:ForwardedEventsChannel + ' was written to ' +
+                              [string] [int] $ageHours + ' hour(s) ago, within the ' +
+                              [string] $MaxForwardedEventAgeHours + '-hour threshold')
+                }
+            }
+        }
     }
 
     Write-Section 'Subscriptions'
@@ -3759,6 +3975,7 @@ function Invoke-Main {
         -Describe '1 to 64 characters made up of letters, digits, dot, underscore or hyphen'
     Assert-ParameterRange   -Name 'ForwardedEventsSizeMb' -Value $ForwardedEventsSizeMb -Minimum 64 -Maximum 16384
     Assert-ParameterRange   -Name 'MinimumFreeDiskPercent' -Value $MinimumFreeDiskPercent -Minimum 0 -Maximum 90
+    Assert-ParameterRange   -Name 'MaxForwardedEventAgeHours' -Value $MaxForwardedEventAgeHours -Minimum 0 -Maximum 8760
     Assert-ParameterRange   -Name 'DeliveryMaxItems' -Value $DeliveryMaxItems -Minimum 1 -Maximum 1000
     Assert-ParameterRange   -Name 'DeliveryMaxLatencyMs' -Value $DeliveryMaxLatencyMs -Minimum 1000 -Maximum 21600000
     Assert-ParameterRange   -Name 'HeartbeatIntervalMs' -Value $HeartbeatIntervalMs -Minimum 1000 -Maximum 21600000
@@ -3772,6 +3989,32 @@ function Invoke-Main {
     # is operator input that becomes part of this path, which is why the
     # parameter is pattern-validated to letters, digits, dot, dash, underscore.
     $configDirectory = [System.IO.Path]::Combine($resolvedRoot, 'Wef')
+
+    # Suitability gate. Not applicable is exit 0 with a clear message: never a
+    # finding - an RMM must not alert on a workstation for not being the
+    # collector - and never an error. Deliberately BEFORE the lock and the
+    # manifest, so an -Apply on the wrong host writes nothing at all, not even a
+    # run record. Modelled on the two domain-controller scripts, which decline
+    # the same way.
+    #
+    # -Rollback is exempt: the manifest, not the host's current SKU, is the
+    # authority on what this toolkit changed. A host armed before this version
+    # shipped must still be able to undo it.
+    if ($mode -ne 'Rollback' -and -not $AllowClientSku) {
+        if (-not (Test-CollectorSuitableSku)) {
+            Write-Section 'Host role'
+            Write-Info 'ProductType 1 (workstation)'
+            Write-Section 'Result'
+            Write-Ok ('Not a collector: this is a client SKU, and a WEF collector is one ' +
+                      'deliberately chosen host. Nothing was changed.')
+            Write-Info ('Measured on Windows 11: without this gate the -Apply set Wecsvc to ' +
+                        'Running/Automatic and sized ForwardedEvents to 2 GB, then failed to ' +
+                        'activate the subscription and exited 2 - a host modified for a role it ' +
+                        'will never hold. Use Enable-WefClient here instead.')
+            Write-Info 'If a workstation really is your collector, pass -AllowClientSku.'
+            return 0
+        }
+    }
 
     if ($mode -eq 'Audit') {
         [void] (Initialize-ToolkitRoot -Path $resolvedRoot -ReadOnly)

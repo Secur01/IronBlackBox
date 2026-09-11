@@ -69,6 +69,22 @@ hides the findings that mattered. `docs/DESIGN.md` §3.1 is the contract.
 Alert on `2` separately from `1`. A fleet where `2` appears has a staging,
 permission or parameter problem, and treating it as "findings" buries it.
 
+### If you were already monitoring `Enable-WefCollector`
+
+**Expect it to go from `0` to `1` on a collector that read clean before v1.1.0,
+and believe the `1`.** It now tests three things it used to only print or not ask
+at all: whether anything has arrived recently, whether `ForwardedEvents` is at
+its own ceiling, and whether the URL ACL lets `Wecsvc` answer a forwarder.
+
+Measured on the lab collector: it printed the newest forwarded event's timestamp
+— ten days old — and then `[ ok ] No findings: this host is collecting forwarded
+events` at exit `0`, while `wecutil gr` reported `Active` and `LastError: 0`. A
+collector that has stopped collecting looked exactly like one that works.
+
+`-MaxForwardedEventAgeHours` (default 48, `0` disables) is the knob. Raise it
+only if your sources are legitimately quiet for that long, which on a
+subscription that asks for 4624 and 4688 they are not.
+
 ### If you were already monitoring `Protect-DefenderConfig` for Defender posture
 
 **Add `Test-DefenderPosture` to your schedule.** Until 2026-09-07,
@@ -113,14 +129,23 @@ decides, and records its own changes. Four orderings still matter.
 |---|---|---|
 | `Enable-AdObjectAuditing` | domain controllers | detects it and changes nothing |
 | `Enable-LegacyAuthAudit` | domain controllers | detects it and changes nothing |
-| `Enable-WefCollector` | the one collector | would make every host a collector — scope it deliberately |
+| `Enable-WefCollector` | the one collector | **declines on a client SKU** since v1.1.0; on a *server* that is not your collector it still does what you ask — scope it deliberately |
 | `Enable-Sysmon` | hosts where you have staged the binary and a config | refuses without `-ConfigPath`; it never downloads anything |
 
 The two DC scripts are safe to send fleet-wide — they identify the host role and
-decline. `Enable-WefCollector` is not: it does what you ask. Measured on a
-Windows 11 client, it set Wecsvc to Running/Automatic and sized
+decline. **`Enable-WefCollector` is now safe on workstations for the same
+reason, and only workstations.** Until v1.1.0 it did whatever you asked:
+measured on a Windows 11 client, it set Wecsvc to Running/Automatic and sized
 `ForwardedEvents` to 2 GB **before** discovering it could not activate the
-subscription, and exited 2. Scope it to the collector.
+subscription, and exited 2 — a host modified for a role it will never hold. It
+now reads `ProductType`, declines on a client at exit 0 having changed nothing,
+and names `Enable-WefClient` as what you wanted instead. `-AllowClientSku` is
+the deliberate opt-in if a workstation really is your collector.
+
+**A collector is a role you assign, not a property a host has**, so that gate
+can only catch the client case. On a *server* that is not your collector this
+script still does exactly what you ask, and `-Rollback` is exempt from the gate
+so a host armed before v1.1.0 can still undo it. Scope it to the collector.
 
 ### On Windows 10/11 workstations
 
@@ -133,11 +158,93 @@ worth knowing before a fleet-wide push to workstations:
 | `Enable-VssPreservation` | **Cannot create a shadow storage association.** `vssadmin` on a client offers `Resize ShadowStorage` but not `Add ShadowStorage`, so the script reports a `[limit]` and exits 1 on the remaining real finding rather than 2. An association Windows or System Restore already made can still be resized. |
 | `Remove-PowerShellV2` | **Nothing to remove.** PowerShell 2.0 is absent from build 26200 entirely — no optional feature, no engine key. The script says so and exits 0. |
 | `Enable-WefClient` | Works, and its `-Rollback` needs `-StopWinRmOnRollback` to finish. Without it, it restores everything except WinRM's state and says so: stopping a host's WinRM is not a decision it takes on its own. |
+| `Enable-LolbinAudit` | **Expect the first `-Apply` to exit 1 and say the policy is not being evaluated.** That is correct, not a defect: the policy is in the store but not yet live. Run `gpupdate /target:computer /force` and re-run `-Apply`; the second run reports `policy proven LIVE` and exits 0. Measured on build 26200, where audit-only rules do evaluate and both `certutil.exe` and `mshta.exe` raised 8003. Do not treat a host as audited until a run says the policy is live. |
 
 `Enable-VssSnapshotSchedule` is unaffected and completes its full cycle on a
 client, so the snapshot half of the VSS pair works there even though the storage
 half does not. Older Windows 10 and 11 builds are **not** measured — an MSP
 fleet holds several, and `docs/VALIDATION.md` records only build 26200.
+
+**The same build was measured again on 2026-09-10 as a domain member**, all
+twenty scripts through the full contract. Nine applied real changes and restored
+them, the two domain-controller scripts declined as they should on a member, six
+had nothing to do on a client, and `Enable-WefClient` forwarded to a real
+collector end to end. Nothing behaved differently from the workgroup pass except
+the one thing §4 above already warns about: a domain GPO wins over what these
+scripts write.
+
+### On domain-joined hosts, a green `-Apply` is not the proof
+
+**Measured 2026-09-09 on a Server 2019 domain member.** Seven scripts write into
+`HKLM:\SOFTWARE\Policies`, which is the Group Policy engine's own registry hive.
+On a domain-joined host the engine owns it, so **a domain GPO that sets the same
+value wins at the next policy refresh** — unattended, on the background
+refresh cycle, with nobody watching.
+
+What was measured, with a GPO that disabled PowerShell ScriptBlock logging:
+
+| | Setting | Was the host actually logging? |
+|---|---|---|
+| after the GPO applied | `0` | **no** — 0 events |
+| after `-Apply` | `1` | yes |
+| after the next refresh | `0` | **no** — 0 events again |
+
+The `-Apply` in the middle printed `[ ok ] ... set` and **exited 0**. So on a
+domain-joined fleet, a run of zeroes does not mean the fleet is armed.
+
+**What to do about it.** Schedule `Test-VisibilityDrift`. It was measured
+catching exactly this — exit 1, naming the value and the script that owns it —
+and it is the only thing in the toolkit that can. This is the same reason §2
+tells you to schedule `Test-DefenderPosture`: the toolkit reports what it can
+see at the moment it runs, and only the drift detector looks at what happened
+after.
+
+**Before a fleet-wide push, check your own GPOs** for anything setting PowerShell
+logging, audit policy, event log sizing or the Windows Firewall log. If a GPO
+sets it, change it there — that is where it will be decided — and let the script
+handle what no GPO touches.
+
+Two things that are not obvious, both measured:
+
+- **A routine policy refresh is not itself a hazard.** With no conflicting GPO, a
+  forced `gpupdate` left every value the toolkit had written in place.
+- **Removing the conflicting GPO does not give you the setting back.** The next
+  refresh deleted the value outright rather than restoring the toolkit's — the
+  engine cleans up what it stopped managing, and the host was still not logging.
+  Re-run the owning script with `-Apply`; that was measured to put the setting
+  back, though the run that proved the logging itself came earlier in the same
+  sequence, not after this step.
+
+### On the collector: the reservation existing is not permission to use it
+
+**Measured 2026-09-10, and it cost an afternoon.** A source can enumerate a
+subscription, appear in `wecutil gr` as `Active` with `LastError: 0`, and then
+fail **every** delivery with WS-Man `2150859027` while zero events arrive.
+
+The cause is the URL ACL on `http://+:5985/wsman/`, which by default grants
+`NT SERVICE\WinRM` and not `NT SERVICE\Wecsvc` — Microsoft KB4494462. On the lab
+collector the `SUBSCRIPTIONMANAGER` reservation was present and the two services
+even shared one process, so the existing W-1 diagnosis did not apply, and it
+still failed. Adding the Wecsvc SID produced `EventDelivery completed
+successfully` on the next cycle and 221 events from a Windows 11 client.
+
+`Enable-WefCollector` reports this per URL from v1.1.0 and prints the exact two
+commands. **It does not run them, and neither should you without reading them**
+— they replace a machine-wide HTTP reservation that WinRM itself listens on:
+
+```
+netsh http delete urlacl url=http://+:5985/wsman/
+netsh http add urlacl url=http://+:5985/wsman/ sddl=D:(A;;GX;;;S-1-5-80-569256582-2953403351-2909559716-1301513147-412116970)(A;;GX;;;S-1-5-80-4059739203-877974739-1245631912-527174227-2996563517)
+```
+
+Then restart `Wecsvc`. The two SIDs are `NT SERVICE\WinRM` and
+`NT SERVICE\Wecsvc`; they are well-known and identical on every Windows host,
+which is why they are safe to write literally.
+
+Why the grant was needed on a host where the services shared a process is **not
+established** — only that it was, measured in both directions. And the lab's
+Server 2019 member forwarded 145 events on 2026-08-27 with the same unfixed ACL,
+which is also unexplained. Treat this as a check to run, not a rule to trust.
 
 ## 5. Reboots
 

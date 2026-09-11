@@ -84,6 +84,39 @@ a clean run as proof.
 `Enable-AdObjectAuditing` and `Enable-LegacyAuthAudit` both answered "Not a
 domain controller: nothing in this script applies here. Nothing was changed."
 
+### Effects observed, not just writes — 2026-09-09
+
+The cycles above prove the contract: the scripts write, re-write nothing, and
+restore. They do not prove the host then *records* anything, and that gap is why
+`docs/AUTHORING.md` carries "never claim an effect you have not observed". Four effects
+were measured on this build, each by running a command and reading the event
+back:
+
+| Effect | How it was observed | Result |
+|---|---|---|
+| ScriptBlock logging | ran a marker string through `powershell.exe`, searched `Microsoft-Windows-PowerShell/Operational` | **4104 naming the marker** |
+| Transcription | same run, searched the transcript directory | **the marker in a transcript file** |
+| Command line on 4688 | ran `cmd.exe /c echo <marker>`, searched the Security log | **4688 carrying the full `Process Command Line`** |
+| AppLocker LOLBin audit | ran `certutil.exe` and `mshta.exe` | **8003 for each, naming the image** |
+
+**AppLocker audit is evaluated on Windows 11 Pro.** The effective policy carried
+all 18 rules, `Exe=AuditOnly`, and both LOLBins raised 8003. That is measured on
+build 26200 with a local policy; it is not a statement about what any edition
+licenses, which this project has not verified.
+
+**The first-activation case behaves the same on a client as on a server, and
+`Enable-LolbinAudit` caught it by itself.** On the first `-Apply` the policy was
+in the local store with `AppIDSvc` running, and `certutil.exe` raised **no**
+8003 — so the script raised a finding saying in words that the policy was *not*
+being evaluated and naming the remedy. After `gpupdate /target:computer /force`
+the re-run reported `policy proven LIVE` and exit 0, and an independent count
+outside the script rose from 1 event to 3. This is the check that exists because
+an earlier AppLocker policy passed every read-back while not being evaluated;
+on a client it fired, and its own remediation path cleared it.
+
+Both scripts were rolled back afterwards and the host was measured back to
+`ScriptBlockLogging` absent, 0 local AppLocker rules, `AppIDSvc` Manual.
+
 ### Three defects found, all of them shaped the same way
 
 **1. `Remove-PowerShellV2` reported a bypass that does not exist, on every
@@ -158,6 +191,196 @@ with no probe written**, later 73 as probes were added. That last number is not 
 facts that still need a human on this OS, and only its shrinking makes the tool
 worth anything.
 
+## Group Policy precedence on a domain-joined host — 2026-09-09
+
+**Server 2019 member of `lab.example`, DomainRole 3.** The one interaction
+this project had never exercised: seven scripts write into
+`HKLM:\SOFTWARE\Policies`, the Group Policy engine's own hive, and on a
+domain-joined host the engine is the owner of record. Nothing had measured what
+happens when a domain GPO disagrees.
+
+A GPO was created on the lab DC setting `EnableScriptBlockLogging` to `0`,
+security-filtered so that only that one computer account had Apply, which is
+what kept it off the DC itself.
+Every step ran as SYSTEM through a one-shot scheduled task — the documented
+recipe, and how an RMM runs it — and the **effect** was measured at each step by
+running a marker string through `powershell.exe` and counting 4104 events naming
+it, rather than trusting the registry read-back:
+
+| Step | Registry | 4104 for the marker |
+|---|---|---|
+| before the GPO applied | `1` | **1** |
+| after `gpupdate /target:computer /force` | `0` | **0** |
+| after `Enable-IRVisibility -Apply` | `1` | **1** |
+| after the next `gpupdate /target:computer /force` | `0` | **0** |
+| GPO deleted, then one more refresh | **`<absent>`** | **0** |
+| after `Enable-IRVisibility -Apply` again | `1` | not re-measured |
+
+**Three results.**
+
+1. **The GPO wins, and the effect follows it.** This is not only a registry
+   value being overwritten — PowerShell stopped writing 4104 and started again,
+   twice, in step with the refresh.
+2. **The `-Apply` in the middle reported `[ ok ] ScriptBlock logging (event 4104)
+   - set` and exited 0.** On a domain-joined fleet a run of zeroes therefore does
+   not mean the fleet is armed. Recorded as finding **GP-1** in
+   the review log kept in the development repository;
+   `docs/DEPLOYMENT.md` §4 now says so at the point an operator plans a push.
+3. **`Test-VisibilityDrift` caught it** — exit 1, naming
+   `HKLM:\Software\Policies\...\EnableScriptBlockLogging` and the script that
+   owns it, *"the value no longer matches what was applied"*. The flagship's
+   entire purpose is this case and it works, which is what keeps GP-1 a reporting
+   defect rather than a blind spot.
+
+**Two things measured that were not predicted.** A forced refresh with **no**
+conflicting GPO left all four watched values in place, so a routine policy cycle
+is not itself a hazard. And deleting the conflicting GPO did **not** restore the
+toolkit's value — the next refresh removed the value outright and the host was
+still not logging, because the engine cleans up what it stopped managing.
+Recovery is a re-run of `-Apply`, which put the value back at `1`; the effect
+was not re-measured after that step, and the table above says so.
+
+This is a domain-**membership** result, not a SKU result: the mechanism is the
+Group Policy engine, which is the same on a workstation.
+
+**Re-measured on a client SKU the same day, and it reproduces exactly.** The
+Windows 11 Pro guest was joined to the lab domain — offline domain join, so no
+password crossed a command line on a host whose 4688 auditing this toolkit turns
+on — and came up `DomainRole 1`, `Test-ComputerSecureChannel` True, SYSVOL
+readable by the computer account, `gpupdate` clean, `[adsisearcher]` answering.
+Against a GPO filtered to its own computer account the four steps ran identically:
+`1` with 1 x 4104, then `0` with **0 x 4104**, then `[ ok ] ScriptBlock logging
+(event 4104) - set` at **exit 0**, then `0` with 0 x 4104 — and
+`Test-VisibilityDrift` at exit 1 naming the value. GP-1 therefore holds on a
+server and on a workstation, and the workgroup results above remain valid for the
+workgroup class they were measured on.
+
+One trap surfaced for the third time in this project while doing it:
+`Test-ComputerSecureChannel` read **False** over SSH as a *local* account and
+True as SYSTEM on the same host, minutes apart. `lab/DOMAIN-LAB.md` documents
+why — a local account is not a domain principal — and it still reads as a defect
+every time.
+
+## Windows 11 as a domain member — the full cycle, 2026-09-10
+
+**Windows 11 Pro build 26200, `DomainRole 1`, member of the lab domain.** The
+workgroup pass above measured a machine that no longer exists in that form, so
+all 20 scripts were run through the whole contract again on the joined host —
+`-Audit`, `-Apply`, `-Apply`, `-Rollback`, `-Rollback` — by
+`lab/Invoke-LabCycle.sh`.
+
+| Outcome | Count | Scripts |
+|---|---|---|
+| Full contract, real changes applied and restored | **9** | `Enable-IRVisibility`, `Enable-LolbinAudit`, `Enable-DnsVisibility`, `Set-TimelineIntegrity`, `Enable-WefClient`, `Protect-EventLogs`, `Protect-DefenderConfig`, `Enable-VssSnapshotSchedule`, `Deploy-TamperAlerts` |
+| Declined by design, correctly | 2 | `Enable-LegacyAuthAudit`, `Enable-AdObjectAuditing` — a domain member is still not a domain controller |
+| Applied nothing, so the rollback half was never exercised — **L2 here, not L3** | 6 | `Enable-UsnJournalTracking`, `Enable-ServerPrefetch`, `Enable-Sysmon`, `Remove-PowerShellV2`, `Protect-ForensicArtifacts`, `Enable-VssPreservation` |
+| Read-only, no `-Apply` to prove | 2 | `Test-DefenderPosture`, `Test-VisibilityDrift` |
+| Not a target for this host | 1 | `Enable-WefCollector` — exits 2 and names defect W-1 itself |
+
+`Enable-WefClient` reached **6 of 6** here, against 3 of 6 on the workgroup pass,
+because the harness can now pass `-StopWinRmOnRollback` to a rollback that
+documents needing it.
+
+Per script, with the six contract checks each — `-Audit` clean, `-Apply`, second
+`-Apply` idempotent, `-Rollback`, rollback reported, second rollback declines:
+
+| Script | | Checks | Reading |
+|---|---|---|---|
+| `Enable-IRVisibility` | PASS | 6/6 | after draining the manifest, see below |
+| `Enable-LolbinAudit` | PASS | 6/6 | real changes applied and restored |
+| `Enable-DnsVisibility` | PASS | 6/6 | real changes applied and restored |
+| `Enable-UsnJournalTracking` | PASS | 6/6 | nothing to apply — L2 here |
+| `Set-TimelineIntegrity` | PASS | 6/6 | real changes, on a domain member this time |
+| `Enable-ServerPrefetch` | PASS | 6/6 | Prefetch is already on for a client — L2 |
+| `Enable-Sysmon` | PASS | 6/6 | refuses without `-ConfigPath`, by design — L2 |
+| `Enable-LegacyAuthAudit` | PASS | 6/6 | declines: a member is not a controller |
+| `Enable-AdObjectAuditing` | PASS | 6/6 | declines: same |
+| `Enable-WefClient` | PASS | 6/6 | real changes, and forwarding proven below |
+| `Enable-WefCollector` | PASS | 6/6 | declines on a client SKU as of v1.1.0 — was **FAIL** 4/6, see below |
+| `Remove-PowerShellV2` | PASS | 6/6 | PSv2 absent from build 26200 — L2 |
+| `Protect-EventLogs` | PASS | 6/6 | real changes applied and restored |
+| `Protect-ForensicArtifacts` | PASS | 6/6 | nothing to apply — L2 |
+| `Protect-DefenderConfig` | PASS | 6/6 | real changes applied and restored |
+| `Enable-VssPreservation` | PASS | 6/6 | nothing to apply — L2 |
+| `Enable-VssSnapshotSchedule` | PASS | 6/6 | real changes applied and restored |
+| `Deploy-TamperAlerts` | PASS | 6/6 | real changes applied and restored |
+| `Test-DefenderPosture` | PASS | 1/1 | read-only, no `-Apply` to prove |
+| `Test-VisibilityDrift` | PASS | 1/1 | read-only, no `-Apply` to prove |
+
+**Originally 19 pass, 1 fail; 20 pass after the fix that failure produced.**
+`Enable-WefCollector` failed two checks: `wecutil cs` returns 15080 — the
+subscription saves but cannot activate — so the `-Apply` exited 2, and it did so
+**after** setting `Wecsvc` to Running/Automatic, leaving the rollback facing a
+partial apply. It named defect W-1 in its own output while doing it.
+
+That was the open design question, and it is now decided. From v1.1.0 the script
+reads `ProductType` and declines on a client SKU before the lock and before the
+manifest, so an `-Apply` on a workstation writes nothing at all — modelled on
+how the two controller scripts decline. Re-measured on the same host: audit exit
+1 → **0**, apply exit 2 → **0**, and 6 of 6 with the harness reporting *"the
+script does not target this host"*. Proven in three states — the client declines,
+the client with `-AllowClientSku` behaves exactly as before, and the domain
+controller does not decline and passes every check. `-Rollback` is exempt from
+the gate, because the manifest and not the host's SKU is the authority on what
+this toolkit changed.
+
+A sixth harness defect surfaced writing this table. `Invoke-LabCycle.sh` closed
+that run with *"the first `-Apply` changed nothing"* four lines below the script's
+own `[ ok ] Wecsvc is now Running and Automatic`. The 2026-09-09 fix had
+separated a decline from a partial apply for one flag and left the closing note
+reading the old two-state world; there is now a third state that says how much
+the apply changed is unknown and points at the script's output instead.
+
+**One cycle failure, and it was the harness judging a host this session had
+dirtied.** `Enable-IRVisibility` first reported *"second rollback did not
+decline"*. The manifest held 14 records from the GP-1 measurements above, and one
+run was in the three-way doctrine's case 3 — the host held neither what the run
+set nor what was recorded before it, because a GPO had set the value to `0` and
+its deletion had then removed the value entirely. The script declined and stayed
+retryable, which is correct. After draining the manifest — one `-AbandonRun` for
+the unresolvable run, one clean rollback — the same script scored **6 of 6**. The
+fifth false failure from this harness, and the first on a host the tester broke.
+
+## Windows Event Forwarding from a client — proven end to end
+
+**2026-09-10.** With the client domain-joined, `Enable-WefClient` was armed
+against the real collector rather than the placeholder URI used in the workgroup
+pass. It took two halves and a cause.
+
+Enumeration worked immediately: WinRM logged `Enumeration completed
+successfully` and the collector listed the client as an event source. Delivery
+failed on every cycle with `EventDelivery failed, error code 2150859027`, and
+**three hypotheses were tested and refuted** — the forwarder's channel read
+access, `Event Log Readers` membership, and the collector's log being full.
+
+**The cause was the URL ACL on the collector.** `http://+:5985/wsman/` granted
+only `NT SERVICE\WinRM`, not `NT SERVICE\Wecsvc`, which is Microsoft KB4494462.
+Adding the Wecsvc SID to both `5985` and `5986` made the next cycle log
+`EventDelivery completed successfully`, and **221 events reached the collector
+from the Windows 11 client, 9 of them naming the marker string the test
+generated**, with `LastHeartbeatTime` advancing to the minute. So forwarding from
+a client SKU is now proven end to end.
+
+Two things this does not settle, kept rather than smoothed over. The KB
+attributes the failure to WinRM and WecSvc running in **separate** `svchost`
+processes; on this collector they shared one PID, so why the grant was needed is
+not established — only that it was, measured in both directions. And the
+Server 2019 member forwarded 145 events on 2026-08-27 with the same unfixed ACL,
+which is not explained either.
+
+**What the toolkit learned from it.** `Enable-WefCollector` had two checks that
+read the right data and did not test it, and both are now fixed and
+mutation-proved:
+
+| Check | Before | After |
+|---|---|---|
+| Is anything arriving? | printed `last write 2026-08-30`, then `[ ok ] No findings: this host is collecting forwarded events` at exit 0 | new `-MaxForwardedEventAgeHours` (default 48): `has not been written to for 250 hour(s)`, exit 1 |
+| Is the channel full? | capacity passed on a `.evtx` **4096 bytes over** its own maximum | reports a channel at or over its own ceiling |
+| May Wecsvc use the reserved URL? | not asked — the endpoint check proves the reservation exists | new `Test-WsmanUrlAcl` reports per URL, with the exact `netsh` pair |
+
+The third is the one that would have answered this in a minute instead of an
+afternoon.
+
 ## Scripts
 
 ### Do the existing stamps survive the P-1 parameter refactor? (2026-08-28)
@@ -200,8 +423,8 @@ object whose ACL is stamped onto every protected group in the domain.
 A script being written is not a script being safe. Twenty-one were written in
 one batch on 2026-08-24 and then reviewed adversarially; the review found
 defects in every one, including several that would lose evidence silently, and
-running them found more that the review had not. the review log kept in the development repository is
-what is left.
+running them found more that the review had not. What is left is recorded in
+the review log kept in the development repository.
 
 The collectors, their validation state and their open defects moved with
 `ir-collection/` to [`Secur01/IronBlackBox-IR`](https://github.com/Secur01/IronBlackBox-IR)
@@ -956,8 +1179,8 @@ nobody will. Proven on the run that produced the problem — **18 restored, 1
 abandoned**, the run out of the eligible set, and every later drift check naming
 the decision in its coverage section so it stays visible.
 
-the review log kept in the development repository carries the doctrine and the evidence, and
-`docs/DESIGN.md` §4.1–4.2 the contract. The short
+The doctrine and the evidence are in the review log kept in the development repository, and the contract
+in `docs/DESIGN.md` §4.1–4.2. The short
 version: a restorer resolves the host **three** ways rather than two — what the
 run set, what it recorded before, or neither — plus a fourth outcome for a change
 that can never be undone. And a rollback records **which** changes it restored,
@@ -1983,8 +2206,8 @@ which is the one thing that went right about them.
 ### The Atomic Red Team exercise: telemetry measured against real attacker behaviour
 
 **2026-08-27.** 11 approved atomics plus one approval-gated extra, run against the
-armed lab. Full detail in the Atomic exercise records kept in the development repository,
-the Atomic exercise records kept in the development repository and the Atomic exercise records kept in the development repository.
+armed lab. Full detail is in the Atomic exercise records kept in the development repository, with the
+reconstruction side in the Atomic exercise records kept in the development repository.
 Atomic Red Team at `6132b92`; every command read from its YAML and written
 verbatim to its own file before execution.
 

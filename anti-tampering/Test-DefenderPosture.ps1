@@ -44,7 +44,7 @@ Reports the posture. Exit 1 if anything needs an operator.
 .NOTES
 Author  : Secur01
 Project : IronBlackBox - https://github.com/Secur01/IronBlackBox
-Version : 1.0.1
+Version : 1.1.0
 License : MIT
 
 Windows PowerShell 5.1, in-box modules only. Requires local administrator;
@@ -66,7 +66,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 1.0
 $script:SuppliedParameter = $PSBoundParameters
 $script:ScriptName    = 'Test-DefenderPosture'
-$script:ScriptVersion = '1.0.1'
+$script:ScriptVersion = '1.1.0'
 $script:ManifestPath = $null
 $script:CurrentRunId        = $null
 $script:ChangeIndex  = 0

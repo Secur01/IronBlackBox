@@ -123,7 +123,7 @@
 .NOTES
     Author  : Secur01
     Project : IronBlackBox - https://github.com/Secur01/IronBlackBox
-    Version : 1.0.1
+    Version : 1.1.0
     License : MIT
 
     Windows PowerShell 5.1. No module dependencies. Requires local
@@ -191,7 +191,7 @@ Set-StrictMode -Version 1.0
 $script:SuppliedParameter = $PSBoundParameters
 
 $script:ScriptName    = 'Enable-LegacyAuthAudit'
-$script:ScriptVersion = '1.0.1'
+$script:ScriptVersion = '1.1.0'
 
 # Populated by Initialize-ToolkitRoot / Start-ManifestRun.
 $script:ManifestPath = $null
