@@ -1,5 +1,62 @@
 # Changelog
 
+## v1.1.1 — 2026-09-12
+
+**Seven scripts print two extra lines on a domain-joined host. No exit code
+changes, and no behaviour changes anywhere.** If you deploy by reading output,
+read on; if you deploy by exit code, this release changes nothing for you.
+
+### On a domain-joined host, a green run does not mean the host is armed
+
+`Enable-IRVisibility`, `Enable-DnsVisibility`, `Enable-WefClient`,
+`Protect-EventLogs`, `Protect-DefenderConfig`, `Deploy-TamperAlerts` and
+`Test-DefenderPosture` read or write values in `HKLM:\SOFTWARE\Policies`. On a
+domain member the Group Policy engine owns that hive, so **a domain GPO setting
+the same value wins at the next policy refresh**, whatever these scripts wrote.
+
+Measured by counting real 4104 events rather than reading the registry back:
+
+| | setting | was the host actually logging? |
+|---|---|---|
+| before the GPO applied | `1` | **yes** |
+| after `gpupdate` | `0` | **no** |
+| after `-Apply` | `1` | yes |
+| after the next refresh | `0` | **no** |
+
+The `-Apply` in the middle printed `[ ok ] ... set` and exited `0`. It still
+does — that is the correct report of what it did, and the toolkit cannot make a
+domain GPO stop winning. What it can do is say so, which it now does, and name
+the one script that catches it afterwards.
+
+**What to do:** schedule `Test-VisibilityDrift`. It detects exactly this, exits
+`1`, and names the value and the script that owns it. And before a fleet-wide
+push, check your own GPOs for anything setting PowerShell logging, audit policy,
+event log sizing or the firewall log — where a GPO sets it, that is where it is
+decided.
+
+The note is informational. It is deliberately **not** a finding: that would exit
+`1` on every domain-joined host forever, and a permanently red monitor gets
+muted. It is silent on a host whose domain role cannot be read.
+
+### Validation
+
+`docs/VALIDATION.md` gains Windows Server 2022, measured in three forms —
+standalone, domain controller of a new forest, and member of that forest — all
+twenty scripts through the full contract in each, with zero failures on the
+controller and the member.
+
+Two things are proven there for the first time: the two domain-controller
+scripts finally **apply** rather than decline, and `Enable-WefCollector`
+completes a full cycle at all. One operational result is worth reading before
+you arm a new controller: **do not run `Enable-AdObjectAuditing` in the minutes
+after promoting one** — Active Directory is still writing its own descriptors,
+the script correctly refuses to continue, and it looks like a bug.
+
+**Windows 10 is now recorded as out of scope** rather than unmeasured. It
+reached end of support in October 2025 and this project does not measure it. If
+your fleet still runs it, nothing here tells you how these scripts behave there.
+
+
 ## v1.1.0 — 2026-09-10
 
 **If you run `Enable-WefCollector` on a schedule, expect it to start reporting

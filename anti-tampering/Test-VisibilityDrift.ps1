@@ -48,7 +48,7 @@
 .NOTES
     Author  : Secur01
     Project : IronBlackBox - https://github.com/Secur01/IronBlackBox
-    Version : 1.1.0
+    Version : 1.1.1
     License : MIT
 
     Windows PowerShell 5.1. Read-only. Requires local administrator to read the
@@ -71,7 +71,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 1.0
 
 $script:ScriptName    = 'Test-VisibilityDrift'
-$script:ScriptVersion = '1.1.0'
+$script:ScriptVersion = '1.1.1'
 
 $script:ManifestPath = $null
 $script:CurrentRunId        = $null

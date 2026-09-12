@@ -160,7 +160,7 @@
 .NOTES
     Author  : Secur01
     Project : IronBlackBox - https://github.com/Secur01/IronBlackBox
-    Version : 1.1.0
+    Version : 1.1.1
     License : MIT
 
     Windows PowerShell 5.1, in-box modules only. Requires local administrator;
@@ -254,7 +254,7 @@ Set-StrictMode -Version 1.0
 $script:SuppliedParameter = $PSBoundParameters
 
 $script:ScriptName    = 'Enable-VssPreservation'
-$script:ScriptVersion = '1.1.0'
+$script:ScriptVersion = '1.1.1'
 
 # Populated by Initialize-ToolkitRoot / Start-ManifestRun.
 $script:ManifestPath = $null

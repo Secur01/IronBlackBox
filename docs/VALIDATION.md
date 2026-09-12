@@ -381,6 +381,163 @@ mutation-proved:
 The third is the one that would have answered this in a minute instead of an
 afternoon.
 
+## Windows Server 2022 — 2026-09-11
+
+**Build 20348, PS 5.1.20348.5499.** The first Server 2022 this toolkit has run
+on, measured in two forms on the same day: as a **standalone server** before
+promotion, and as the **domain controller of a new forest** after it. The
+Server 2019 lab that produced every earlier L4 row was retired the same day; an
+AMI of its controller is kept, and `lab/DOMAIN-LAB.md` records both labs.
+
+### Standalone server, before promotion
+
+All twenty scripts through the full contract. **Thirteen applied real changes
+and restored them**, three had nothing to do, two are read-only, and the two
+domain-controller scripts declined as they should on a host that is not one.
+
+Two results came out of it, and only one is a defect.
+
+**`Enable-VssPreservation` exposed a harness defect, not a script one.** On a
+fresh server there is no shadow storage association, so the script **creates**
+one — and removing an association discards the snapshots in it while
+`vssadmin delete shadowstorage` is not a documented command, so its rollback
+declines **permanently** and exits 1. That is `docs/DESIGN.md` §4.1's fourth
+outcome and `docs/DEPLOYMENT.md` §7 documents it. `lab/Invoke-LabCycle.sh`
+scored it as two failures. It never surfaced on Server 2019 because the
+association already existed there, so nothing was created and nothing was
+irreversible: **the defect needed a host nobody had run this on.** The harness
+now reads the run's status out of the manifest rather than grepping stdout for a
+sentence, and reports a permanent decline as its own outcome.
+
+**`Enable-WefCollector` exits 2 here, and that is the known limit.** `wecutil cs`
+returns 15080 and the apply exits 2 after starting Wecsvc. The client-SKU gate
+added in v1.1.0 does not apply — this is `ProductType 3` — and v1.1.0's own note
+says so: the gate catches only the client case, and on a *server* that is not
+your collector the script still does what you ask.
+
+### Domain controller of a new forest
+
+`ProductType 2`, `DomainRole 5`, functional level 7. **All twenty scripts pass
+the full contract: fourteen applied real changes and restored them, four had
+nothing to do, two are read-only, nothing failed.**
+
+Three things are proven here for the first time.
+
+**The two domain-controller scripts finally apply rather than decline.**
+`Enable-AdObjectAuditing` and `Enable-LegacyAuthAudit` exist for this host class
+and every previous measurement of them on a non-controller could only record a
+correct refusal.
+
+**`Enable-WefCollector` completes a full cycle — anywhere.** On Server 2019 it
+carried W-1, the `svchost` split that stopped Wecsvc registering the
+SubscriptionManager URL; on client SKUs it declines or cannot activate the
+subscription. On a fresh Server 2022 forest it passes 6 of 6, and
+`Enable-WefClient` passes against it.
+
+**There is no "Windows Server 2022" functional level, and the lab is at the
+ceiling.** Asked rather than assumed: `Install-ADDSForest -ForestMode` on this
+OS accepts nothing above `WinThreshold`, and `Set-ADForestMode` stops at
+`Windows2016Forest`. Level 7 is the maximum Server 2022 offers.
+
+### Member server of that forest
+
+`ProductType 3`, `DomainRole 3`, secure channel True. **All twenty scripts pass:
+zero failures.** The two controller scripts decline, as they must on a member
+that is not one, and the rest complete the contract.
+
+This is the class most of an MSP fleet actually is — a domain-joined application
+or file server — and it had never been measured on any OS newer than 2019.
+
+**`Enable-WefCollector` passes here and exited 2 on the standalone**, on the same
+OS build, the same day, with the same code. The only difference between the two
+hosts is domain membership, and the standalone's failure was `wecutil cs`
+returning 15080, "the subscription is saved successfully, but it can't be
+activated at this time". A source-initiated subscription authenticates its
+sources by machine account, which a workgroup host has no way to do — so the
+correlation is exact and the mechanism is plausible, but this pass did not
+isolate it. Recorded as an observation, not a proven cause.
+
+**The permanent-decline fix was proven on a live host here.** Earlier the same
+day, `Enable-VssPreservation`'s permanent decline could only be re-checked
+against archived run directories, because the first cycle had already created
+the shadow storage association on that host and creation is irreversible — the
+case cannot be replayed on a machine that has seen it. This member was fresh, so
+the harness met the real thing and reported it correctly:
+
+```
+PERMANENT DECLINE: the rollback refused to undo a change that can never
+be undone, and said which one. ... but it does mean the host was NOT
+returned to its baseline.
+```
+
+Five checks, zero failures, where the unfixed harness would have scored two
+failures against a script behaving exactly as `docs/DESIGN.md` §4.1 specifies.
+
+### The `major 2` branch finally executed — 2026-09-12
+
+**`Remove-PowerShellV2`'s v1.0.1 fix shipped in a public release with one branch
+that had never run.** That fix distinguishes *a v2 engine really ran* (the child
+reports PSVersion major 2) from *it fell back to 5.1* (major 5), and only the
+fall-back path had ever been measured — Windows 11 build 26200 has no v2 engine
+at all, and the Server 2019 lab never had it enabled. Windows 10 was the obvious
+host and is out of scope.
+
+Server 2022 still offers it. The optional feature is present and the engine key
+ships enabled; the missing ingredient is .NET 3.5, without which the v2 CLR
+cannot load. Installing `NET-Framework-Core` and `PowerShell-V2` made
+`powershell.exe -Version 2` genuinely run, and the whole chain was then measured
+on one host in one sitting:
+
+| Step | Result |
+|---|---|
+| before | `-Version 2` → **`MAJOR=2`** — a v2 engine really ran |
+| `-Audit` | **`PowerShell 2.0 CAN RUN on this host - ScriptBlock logging can be bypassed. the child engine reported PSVersion major 2, so a v2 engine really ran`** |
+| full contract cycle | **6 of 6** |
+| `-Apply` | 1 change, exit 0 |
+| after | `-Version 2` → *"The Windows PowerShell 2 engine is not installed on this computer"*, and the engine key is gone |
+| control | the same command without `-Version 2` still answers `MAJOR=5` |
+
+So the branch is correct, the removal works, **and the exposure closes without a
+reboot on this path** — the feature dropped to `Available` and the engine key
+disappeared in the same run. The control matters: without it, "no output from
+the v2 engine" would be indistinguishable from a broken host.
+
+**One reporting imprecision found while doing it, recorded not fixed.** On a host
+left mid-transition (`EnablePending`), the script printed *"no restart is
+pending"*. Its `$script:RestartNeeded` means *this run did not cause one*, which
+is true, but the sentence reads as a claim about the host — and the script had
+just read `EnablePending` from Windows. The advice around it is right (*"do not
+treat this host as covered until that is understood"*); only the clause is
+misleading. Not fixed here: a wording change to a shipped script deserves its own
+test rather than a tail-end edit.
+
+### The operational result worth knowing before a fleet push
+
+**Do not run `Enable-AdObjectAuditing` in the minutes after promoting a domain
+controller.** Run three minutes after `NTDS` started, it refused with
+
+```
+DACL CHANGED on CN=AdminSDHolder,... This script must never do that.
+Refusing to continue; the previous descriptor is in the manifest for this run.
+```
+
+and exited 2. That is the guard working exactly as designed: the script sets
+SACLs and must never touch permissions on the object whose ACL SDProp stamps
+onto every protected group, so on detecting a DACL it did not write it stops
+rather than risk it.
+
+It was not the script. Sampling the DACL every 20 seconds for two minutes with
+nothing running showed it perfectly stable — 22 ACEs, identical hash — and
+re-running on the settled controller gave `apply exit 0`, idempotent, rollback
+complete, **6 of 6**. Active Directory was still writing its own descriptors
+minutes after the promotion reboot. An MSP arming a freshly promoted controller
+would see exit 2 and read it as a bug; it is a timing window, and the remedy is
+to wait.
+
+The re-run's one remaining failure was the familiar manifest artefact — the
+earlier aborted run left an unresolved record, so the second rollback legitimately
+resolved it rather than declining. Drained, it scored 6 of 6.
+
 ## Scripts
 
 ### Do the existing stamps survive the P-1 parameter refactor? (2026-08-28)

@@ -151,7 +151,7 @@
 .NOTES
     Author  : Secur01
     Project : IronBlackBox - https://github.com/Secur01/IronBlackBox
-    Version : 1.1.0
+    Version : 1.1.1
     License : MIT
 
     Windows PowerShell 5.1. Requires local administrator; enforced in code by
@@ -227,7 +227,7 @@ Set-StrictMode -Version 1.0
 $script:SuppliedParameter = $PSBoundParameters
 
 $script:ScriptName    = 'Protect-DefenderConfig'
-$script:ScriptVersion = '1.1.0'
+$script:ScriptVersion = '1.1.1'
 
 # Populated by Initialize-ToolkitRoot / Start-ManifestRun.
 $script:ManifestPath = $null
@@ -2430,6 +2430,45 @@ function Assert-RemovalArgument {
     return $true
 }
 
+function Write-GroupPolicyOwnershipNote {
+    <#
+        GP-1. On a domain-joined host the Group Policy engine owns
+        HKLM:\SOFTWARE\Policies, and this script reads or writes values that live
+        there. A domain GPO setting the same value WINS at the next policy
+        refresh, whatever was set locally.
+
+        Measured 2026-09-09 on a Server 2019 member and again on a Windows 11
+        client, by counting real 4104 events rather than reading the registry
+        back: the value went 1 -> logging worked, gpupdate -> 0 and logging
+        STOPPED, -Apply -> 1 and it worked again while printing "[ ok ] ... set"
+        at exit 0, next refresh -> 0 and stopped again. So on a domain-joined
+        fleet a run of zeroes does not mean the fleet is armed.
+
+        INFORMATIONAL, NEVER A FINDING, NEVER A HOST LIMIT, and both alternatives
+        were considered and rejected. A finding would exit 1 on every
+        domain-joined host forever - exactly the T-4 defect this project already
+        fixed once, and a monitor that is permanently red gets muted. A [limit]
+        would claim no lever exists when one does: it belongs to whoever owns the
+        GPO, not to this script.
+
+        Silent on a host whose domain role cannot be read. Asserting domain
+        membership this run did not observe would be the same class of mistake
+        the note exists to warn about.
+    #>
+    $role = -1
+    try { $role = [int] (Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).DomainRole }
+    catch { return }
+    # 1 member workstation, 3 member server, 4 backup DC, 5 primary DC.
+    # 0 and 2 are standalone and have no domain policy to be overridden by.
+    if ($role -ne 1 -and $role -ne 3 -and $role -ne 4 -and $role -ne 5) { return }
+    Write-Info ('This host is joined to a domain, and the values this script touches live in ' +
+                'the Group Policy engine''s own registry hive. A domain GPO that sets them wins ' +
+                'at the next policy refresh, whatever is set locally - measured, with the ' +
+                'logging stopping when it does.')
+    Write-Info ('Schedule Test-VisibilityDrift. It is the only thing in this toolkit that ' +
+                'detects that afterwards, and a clean run here does not rule it out.')
+}
+
 function Invoke-Main {
     $mode = 'Audit'
     if ($Apply)    { $mode = 'Apply' }
@@ -2466,6 +2505,7 @@ function Invoke-Main {
         [void] (Initialize-ToolkitRoot -Path $resolvedRoot -ReadOnly)
         [void] (Invoke-HostCheck -ResolvedRoot $resolvedRoot)
         Write-Section 'Result'
+        Write-GroupPolicyOwnershipNote
         if ($script:Findings.Count -gt 0) {
             Write-Info ([string] $script:Findings.Count +
                         ' finding(s). A NEW exclusion is the one this script exists to catch.')
@@ -2543,6 +2583,7 @@ function Invoke-Main {
             # no evidence the toolkit ran here and nothing to compare against.
             Stop-ManifestRun -Status $status
             Write-Section 'Result'
+            Write-GroupPolicyOwnershipNote
             if ($status -ne 'completed') { return 2 }
             Write-Ok ([string] $verified + ' change(s) applied.')
             if ($script:ChangeIndex -gt $verified) {
@@ -2585,6 +2626,7 @@ function Invoke-Main {
         }
         if ($null -eq $target) {
             Write-Section 'Result'
+            Write-GroupPolicyOwnershipNote
             Write-Info 'Nothing to roll back: no eligible run for this script in the manifest.'
             return 0
         }
@@ -2642,6 +2684,7 @@ function Invoke-Main {
                 -RestoredChangeIds @($restoredIds.ToArray())
             Stop-ManifestRun -Status 'completed-abandoned-by-operator'
             Write-Section 'Result'
+            Write-GroupPolicyOwnershipNote
             Write-Info ([string] @($restoredIds).Count + ' change(s) restored, ' +
                         [string] (@($declinedIds).Count + @($permanentIds).Count) +
                         ' abandoned on your instruction. The host still holds whatever those changes' +
@@ -2668,6 +2711,7 @@ function Invoke-Main {
         Stop-ManifestRun -Status $runEndStatus
 
         Write-Section 'Result'
+        Write-GroupPolicyOwnershipNote
         if ($failures -gt 0) {
             Write-Info ([string] $failures + ' change(s) could not be restored. The run stays retryable.')
             return 2

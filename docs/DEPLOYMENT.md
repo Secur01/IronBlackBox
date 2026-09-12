@@ -162,8 +162,10 @@ worth knowing before a fleet-wide push to workstations:
 
 `Enable-VssSnapshotSchedule` is unaffected and completes its full cycle on a
 client, so the snapshot half of the VSS pair works there even though the storage
-half does not. Older Windows 10 and 11 builds are **not** measured — an MSP
-fleet holds several, and `docs/VALIDATION.md` records only build 26200.
+half does not. Older Windows 11 builds are **not** measured — an MSP fleet holds several, and
+`docs/VALIDATION.md` records only build 26200.
+
+**Windows 10 is out of scope.** It reached end of support in October 2025 and this project does not measure it: no row here covers a Windows 10 host, and none will. That is a decision, not a gap waiting to be filled — if your fleet still runs it, nothing in this repository tells you how these scripts behave there.
 
 **The same build was measured again on 2026-09-10 as a domain member**, all
 twenty scripts through the full contract. Nine applied real changes and restored

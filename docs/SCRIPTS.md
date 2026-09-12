@@ -103,8 +103,9 @@ host, decides, and records its own changes. Four orderings still matter, and
   not have. Four *effects* were observed rather than only the writes — 4104, a
   transcript, a 4688 carrying the command line, and an 8003 per LOLBin — and
   Windows Event Forwarding from a client is proven end to end, 221 events on the
-  collector. Older Windows 10 and 11 builds remain unmeasured, and an MSP fleet
-  holds several.
+  collector. Older Windows 11 builds remain unmeasured, and an MSP fleet holds
+  several. **Windows 10 is out of scope** — end of support was October 2025 and
+  this project does not measure it, which is a decision rather than a gap.
 - **Prefetch on fast media.** `Enable-ServerPrefetch` writes the setting
   correctly and the host removes it again minutes later on an NVMe system
   volume. The mechanics are proven; the outcome is not. Its row explains what

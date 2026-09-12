@@ -87,8 +87,11 @@ version, one domain, one OS build. **One client SKU has since been measured, in
 both workgroup and domain-joined form** — Windows 11 Pro build 26200, where nine
 scripts hold a full apply-and-rollback cycle in each, three defects were found
 and fixed, and Windows Event Forwarding from a client is now proven end to end.
-But older Windows 10 and 11 builds are unmeasured, and an MSP fleet holds
-several. It says nothing about
+Older Windows 11 builds are unmeasured, and an MSP fleet holds several.
+**Windows 10 is out of scope** — it reached end of support in October 2025 and
+this project does not measure it, which is a decision rather than a gap waiting
+to be filled: if your fleet still runs it, nothing here tells you how these
+scripts behave there. It says nothing about
 non-English Windows, no EDR was present, and this toolkit records rather than
 blocks — nothing here claims an attack was stopped. Read a script before you run it as SYSTEM on a machine you care about;
 they are standalone and written to be read.
